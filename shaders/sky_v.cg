@@ -1,0 +1,21 @@
+// Sky (vs_1_1). Registers: WorldViewProj c0-c3, cfSkyFogFalloff c4. Colour rgb as given with alpha 0.5, the
+// texture coordinate as given; the fog factor saturate((z - c4.y) * c4.x) of the object height (uFog: colour,
+// enable) as COLOR1 = (fog colour * (1 - factor), factor).
+
+void main(
+    float4 aPosition,
+    float4 aColor,
+    float4 aTex0,
+    uniform float4 uC[5],
+    uniform float4 uFog,
+    float4 out vPosition : POSITION,
+    float4 out vColor : COLOR0,
+    float4 out vColor1 : COLOR1,
+    float4 out vTex0 : TEXCOORD0)
+{
+    vPosition = float4(dot(aPosition, uC[0]), dot(aPosition, uC[1]), dot(aPosition, uC[2]), dot(aPosition, uC[3]));
+    float haze = (1.0 - saturate((aPosition.z - uC[4].y) * uC[4].x)) * uFog.w;
+    vColor1 = float4(uFog.rgb * haze, 1.0 - haze);
+    vColor = float4(aColor.zyx, 0.5);
+    vTex0 = aTex0;
+}

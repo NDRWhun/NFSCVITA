@@ -1,0 +1,43 @@
+// Flares (PARTICLES flares, vs_1_1). Registers: WorldViewProj c0-c3, cmWorldView c4-c6. A billboard: the view's
+// right and up axes rotated about the view axis by TEXCOORD1.z (when positive) and scaled by TEXCOORD1.xy offset
+// the position. Outputs: the colour, the texture coordinate, and (not with SIMPLE, the shader-1 flares) the screen
+// coordinate, depth and saturate(0.05 - 0.05 depth) of the soft-particle test.
+
+void main(
+    float4 aPosition,
+    float4 aColor,
+    float2 aTex0,
+    float4 aTex1,
+    uniform float4 uC[7],
+    float4 out vPosition : POSITION,
+    float4 out vColor : COLOR0,
+#ifndef SIMPLE
+    float4 out vTex1 : TEXCOORD1,
+#endif
+    float2 out vTex0 : TEXCOORD0)
+{
+    // Rotation about the view axis a by the angle (Rodrigues), applied to the right and up axes.
+    float s = sin(aTex1.z), c = cos(aTex1.z);
+    float3 a = normalize(uC[6].xyz);
+    float3 k = (1.0 - c) * a;
+    float3 sa = s * a;
+    float3 r0 = float3(k.x * a.x + c, k.y * a.x - sa.z, k.z * a.x + sa.y);
+    float3 r1 = float3(k.x * a.y + sa.z, k.y * a.y + c, k.z * a.y - sa.x);
+    float3 r2 = float3(k.x * a.z - sa.y, k.y * a.z + sa.x, k.z * a.z + c);
+    float3 right = float3(dot(uC[4].xyz, r0), dot(uC[4].xyz, r1), dot(uC[4].xyz, r2));
+    float3 up = float3(dot(uC[5].xyz, r0), dot(uC[5].xyz, r1), dot(uC[5].xyz, r2));
+    if (!(aTex1.z > 0.0))
+    {
+        right = uC[4].xyz;
+        up = uC[5].xyz;
+    }
+    float4 corner = float4(right * aTex1.x + up * aTex1.y + aPosition.xyz, aPosition.w);
+    float4 h = float4(dot(corner, uC[0]), dot(corner, uC[1]), dot(corner, uC[2]), dot(corner, uC[3]));
+    vPosition = h;
+#ifndef SIMPLE
+    float3 ndc = h.xyz / h.w;
+    vTex1 = float4(ndc.xy * float2(0.5, -0.5) + 0.5, ndc.z, saturate(ndc.z * -0.0500000007 + 0.0500000007));
+#endif
+    vColor = aColor.zyxw;
+    vTex0 = aTex0;
+}

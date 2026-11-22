@@ -1,0 +1,24 @@
+// FE mask (ps_1_1): colour texel times vertex colour; alpha the texel alpha times the mask alpha times the vertex
+// alpha.
+
+float4 main(
+    float4 vColor : COLOR0,
+    float2 vTex0 : TEXCOORD0,
+    float2 vTex1 : TEXCOORD1,
+    uniform sampler2D uTex0,
+    uniform sampler2D uTex1,
+    uniform float4 uAlphaTest) : COLOR
+{
+    half4 t0 = tex2D<half4>(uTex0, vTex0);
+    half4 t1 = tex2D<half4>(uTex1, vTex1);
+    half4 v0 = half4(vColor);
+    half4 c;
+    c.a = t0.a * t1.a;
+    c.rgb = t0.rgb * v0.rgb;
+    c.a = c.a * v0.a;
+#ifdef ATEST
+    if (uAlphaTest.x * saturate(c.a) < uAlphaTest.y)
+        discard;
+#endif
+    return c;
+}

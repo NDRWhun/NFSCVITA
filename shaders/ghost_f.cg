@@ -1,0 +1,16 @@
+// Ghost car (GHOSTCAR ghostcar, shader 2, ps_2_0): the envmap (cube, sampler 0) times the vertex colour, halved;
+// alpha 1.
+
+float4 main(
+    half4 vColor : COLOR0,
+    half3 vTex0 : TEXCOORD0,
+    uniform samplerCUBE uTex0,
+    uniform float4 uAlphaTest) : COLOR
+{
+    half4 c = half4(texCUBE<half4>(uTex0, vTex0).rgb * vColor.rgb * 0.5, 1.0);
+#ifdef ATEST
+    if (half(uAlphaTest.x) < half(uAlphaTest.y))
+        discard;
+#endif
+    return c;
+}

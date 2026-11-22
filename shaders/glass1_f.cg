@@ -1,0 +1,23 @@
+// Car glass (GLASSREFLECTSHADER glassreflect, shader 1, ps_1_1). Samplers: diffuse s0, envmap s1 (cube). The texel
+// times the vertex colour, blended toward the envmap by the texel's alpha (all four channels); then the fog:
+// vColor1 = (fog colour * (1 - factor), factor).
+
+float4 main(
+    half4 vColor : COLOR0,
+    half4 vColor1 : COLOR1,
+    float2 vTex0 : TEXCOORD0,
+    half3 vTex1 : TEXCOORD1_HALF,
+    uniform sampler2D uTex0,
+    uniform samplerCUBE uTex1,
+    uniform float4 uAlphaTest) : COLOR
+{
+    half4 tex = tex2D<half4>(uTex0, vTex0);
+    half4 env = texCUBE<half4>(uTex1, vTex1);
+    half4 c = lerp(half4(tex.rgb * vColor.rgb, tex.a), env, saturate(tex.a));
+#ifdef ATEST
+    if (half(uAlphaTest.x) * c.a < half(uAlphaTest.y))
+        discard;
+#endif
+    c.rgb = c.rgb * vColor1.a + vColor1.rgb;
+    return c;
+}

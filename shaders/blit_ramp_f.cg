@@ -1,0 +1,11 @@
+// Shows the back buffer through a gamma ramp: each channel looked up in its row of the 256 x 1 table, then the gamma.
+
+half4 main(float2 vTexCoord : TEXCOORD0, uniform sampler2D uTexture, uniform sampler2D uRamp, uniform half uInvGamma)
+    : COLOR
+{
+    float3 color = tex2D<float4>(uTexture, vTexCoord).rgb * (255.0 / 256.0) + (0.5 / 256.0);
+    half r = tex2D<half4>(uRamp, float2(color.r, 0.5)).r;
+    half g = tex2D<half4>(uRamp, float2(color.g, 0.5)).g;
+    half b = tex2D<half4>(uRamp, float2(color.b, 0.5)).b;
+    return half4(pow(half3(r, g, b), uInvGamma), 1.0);
+}

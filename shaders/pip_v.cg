@@ -1,0 +1,18 @@
+// Picture-in-picture (vs_2_0): position as given; coordinate 1 is coordinate 0 with v moved by cvDownSampleOffset0.x
+// (c0), up where v is 0 and down elsewhere.
+
+void main(
+    float4 aPosition,
+    float4 aTex0,
+    uniform float4 uC[1],
+    float4 out vPosition : POSITION,
+    float2 out vTex0 : TEXCOORD0,
+    float2 out vTex1 : TEXCOORD1)
+{
+    float y2 = aTex0.y * aTex0.y;
+    float s = -y2 >= y2 ? 1.0 : 0.0;
+    float offset = s * (uC[0].x - -uC[0].x) + -uC[0].x;
+    vPosition = aPosition;
+    vTex0 = aTex0.xy;
+    vTex1 = float2(aTex0.x, offset + aTex0.y);
+}

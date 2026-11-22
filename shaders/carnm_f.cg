@@ -1,0 +1,57 @@
+// Car with normal map (shader 2, ps_2_0). Registers: cmLocalColourMatrix c0-c2 (light colour by column),
+// cmLocalDirectionMatrix c3 (one light), cvSpecularMin c4, cvSpecularRange c5, cvPowers c6, cvVinylScales c7. The
+// normal map (sampler 1, bias from the coordinate's w) perturbs the normal in the tangent frame for one specular
+// light; vinyl over paint and the cube envmap (sampler 2) as the car's; then the fixed-function vertex fog (factor
+// in vTex3.w; uFog: colour, enable).
+
+float4 main(
+    float4 vColor : COLOR0,
+    float4 vColor1 : COLOR1,
+    float3 vTex0 : TEXCOORD0,
+    float4 vTex1 : TEXCOORD1,
+    float4 vTex2 : TEXCOORD2,
+    float4 vTex3 : TEXCOORD3,
+    float4 vTex5 : TEXCOORD5,
+    uniform sampler2D uTex0,
+    uniform sampler2D uTex1,
+    uniform samplerCUBE uTex2,
+    uniform float4 uC[8],
+    uniform float4 uFog,
+    uniform float4 uAlphaTest) : COLOR
+{
+    half4 bump = tex2Dbias<half4>(uTex1, float4(vTex1.xy, 0.0, vTex1.w));
+    half3 n = normalize(half3(vTex3.xyz));
+    half3 t = normalize(half3(vTex5.xyz));
+    half2 b = half2(float2(bump.xy) + -0.5) * 4.0;
+    half3 binormal = n.yzx * t.zxy - n.zxy * t.yzx;
+    half bz = 0.5 / rsqrt(abs(dot(b, -b) + 1.0));
+    binormal = binormal * half(vTex5.w);
+    half3 p = t * b.x + b.y * binormal;
+    p = n * bz + p;
+    half3 e = normalize(half3(vTex2.xyz));
+    half pe = dot(-e, p);
+    half3 r = p * -(pe + pe) + -e;
+    half power = pow(saturate(dot(half3(uC[3].xyz), r)), half(uC[6].y));
+    half3 spec = power * ((power * half3(uC[5].xyz) + half3(uC[4].xyz)) * half3(uC[0].x, uC[1].x, uC[2].x));
+
+    half4 env = texCUBE<half4>(uTex2, normalize(vTex0));
+    half4 tex = tex2Dbias<half4>(uTex0, float4(vTex1.xy, 0.0, vTex1.w));
+    half4 v0 = half4(vColor);
+    half4 v1 = half4(vColor1);
+    half3 reflection = env.rgb * v1.rgb;
+    half3 halfColour = v0.rgb * 0.5;
+    half envMask = 1.0 - min(tex.a, max(half(uC[7].z), 0.0));
+    half3 vinyl = half(uC[7].x) * (v0.rgb - v1.a) + v1.a;
+    half3 base = vinyl * tex.rgb - halfColour;
+    base = tex.a * base + halfColour;
+    half specMask = 1.0 - min(tex.a, max(half(uC[7].y), 0.0));
+    half3 c = envMask * reflection + base;
+    half4 result = half4(spec * specMask + c, tex.a * v0.a);
+#ifdef ATEST
+    if (uAlphaTest.x * saturate(result.a) < uAlphaTest.y)
+        discard;
+#endif
+    half f = max(saturate(half(vTex3.w)), half(1.0 - uFog.w));
+    result.rgb = lerp(half3(uFog.rgb), result.rgb, f);
+    return result;
+}

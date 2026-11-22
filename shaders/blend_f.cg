@@ -1,0 +1,19 @@
+// BlendTextures (ps_2_0): sampler 0 times cavSampleWeights[0].x plus sampler 1 times cavSampleWeights[0].y (c0).
+
+float4 main(
+    float2 vTex0 : TEXCOORD0,
+    uniform sampler2D uTex0,
+    uniform sampler2D uTex1,
+    uniform float4 uC[1],
+    uniform float4 uAlphaTest) : COLOR
+{
+    half4 r1 = tex2D<half4>(uTex1, vTex0);
+    half4 r0 = tex2D<half4>(uTex0, vTex0);
+    r1 = r1 * half(uC[0].y);
+    half4 c = r0 * half(uC[0].x) + r1;
+#ifdef ATEST
+    if (uAlphaTest.x * saturate(c.a) < uAlphaTest.y)
+        discard;
+#endif
+    return c;
+}

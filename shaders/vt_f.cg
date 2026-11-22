@@ -1,0 +1,46 @@
+// Visual treatment (ps_2_0): scene (sampler 0) plus bloom (sampler 2) times cfBloomScale (c1.x) looks up the colour
+// cube (sampler 3, a volume stored as an atlas, uVol), times the blue of sampler 1 and cvVisualTreatmentParams.x
+// (c0); alpha is the scene's. NEAREST reads the nearest slice of the colour cube instead of blending two.
+
+// A volume atlas: slices side by side; uVol = (depth, 1 / depth, 0.5 / width, 1 - 0.5 / width).
+half4 volume(sampler2D atlas, float3 c, float4 uVol)
+{
+#ifdef NEAREST
+    float s = min(floor(saturate(c.z) * uVol.x), uVol.x - 1.0);
+    return tex2D<half4>(atlas, float2((s + clamp(c.x, uVol.z, uVol.w)) * uVol.y, c.y));
+#else
+    float z = saturate(c.z) * uVol.x - 0.5;
+    float z0 = floor(z);
+    float f = z - z0;
+    float u = clamp(c.x, uVol.z, uVol.w);
+    float s0 = clamp(z0, 0.0, uVol.x - 1.0);
+    float s1 = clamp(z0 + 1.0, 0.0, uVol.x - 1.0);
+    half4 a = tex2D<half4>(atlas, float2((s0 + u) * uVol.y, c.y));
+    half4 b = tex2D<half4>(atlas, float2((s1 + u) * uVol.y, c.y));
+    return lerp(a, b, half(f));
+#endif
+}
+
+float4 main(
+    float2 vTex0 : TEXCOORD0,
+    uniform sampler2D uTex0,
+    uniform sampler2D uTex1,
+    uniform sampler2D uTex2,
+    uniform sampler2D uTex3,
+    uniform float4 uC[2],
+    uniform float4 uVol,
+    uniform float4 uAlphaTest) : COLOR
+{
+    half4 r1 = tex2D<half4>(uTex2, vTex0);
+    half4 r0 = tex2D<half4>(uTex0, vTex0);
+    r0.rgb = half(uC[1].x) * r1.rgb + r0.rgb;
+    r1 = volume(uTex3, float3(r0.rgb), uVol);
+    half4 r2 = tex2D<half4>(uTex1, vTex0);
+    r0.rgb = r1.rgb * r2.b;
+    r0.rgb = r0.rgb * half(uC[0].x);
+#ifdef ATEST
+    if (uAlphaTest.x * saturate(r0.a) < uAlphaTest.y)
+        discard;
+#endif
+    return r0;
+}

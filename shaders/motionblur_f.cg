@@ -1,0 +1,31 @@
+// Motion blur (VISUALTREATMENT motionblur, ps_3_0). Registers: kWeights c0-c7, cvBlurParams c8. Sampler: the
+// downscaled blur source s0. Four of the eight taps (the even coordinates), each weighted by the sum of its own and
+// the next tap's kWeights / 23; each tap's colour is raised to max(t, t / (c8.x - t)), alpha as read.
+
+half4 tap(sampler2D source, float2 uv, float4 uC[9], half weight)
+{
+    half4 t = tex2D<half4>(source, uv);
+    half3 bright = max(t.rgb, t.rgb / (half(uC[8].x) - t.rgb));
+    return half4(bright, t.a) * weight;
+}
+
+float4 main(
+    float2 vTex0 : TEXCOORD0,
+    float2 vTex1 : TEXCOORD1,
+    float2 vTex2 : TEXCOORD2,
+    float2 vTex3 : TEXCOORD3,
+    uniform sampler2D uTex0,
+    uniform float4 uC[9],
+    uniform float4 uAlphaTest) : COLOR
+{
+    const half k = 0.0434782617;
+    half4 c = tap(uTex0, vTex0, uC, half(uC[0].x + uC[1].x) * k);
+    c = c + tap(uTex0, vTex1, uC, half(uC[2].x + uC[3].x) * k);
+    c = c + tap(uTex0, vTex2, uC, half(uC[4].x + uC[5].x) * k);
+    c = c + tap(uTex0, vTex3, uC, half(uC[6].x + uC[7].x) * k);
+#ifdef ATEST
+    if (half(uAlphaTest.x) * c.a < half(uAlphaTest.y))
+        discard;
+#endif
+    return c;
+}

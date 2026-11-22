@@ -1,0 +1,34 @@
+// World (shader 2, ps_2_0). The diffuse texel times the vertex colour plus the headlight term (range, cone, facing
+// and edge from the interpolated vector and dot products; cfFogEnable, the headlight scale, is in vTex1.w); then the
+// fixed-function fog: vColor1 = (fog colour * (1 - factor), factor). Clamps whose other bound cannot be reached
+// are one-sided.
+
+float4 main(
+    float4 vColor : COLOR0,
+    half4 vColor1 : COLOR1,
+    float2 vTex0 : TEXCOORD0,
+    float4 vTex1 : TEXCOORD1,
+    float2 vTex2 : TEXCOORD2,
+    uniform sampler2D uTex0,
+    uniform float4 uAlphaTest) : COLOR
+{
+    half4 tex = tex2D<half4>(uTex0, vTex0);
+    float squared = dot(vTex1.xyz, vTex1.xyz);
+    float invDistance = rsqrt(squared);
+    half2 cosines = half2(vTex2 * invDistance);
+    // Attenuation 1 - distance / 235 and the cone cosine, both at most 1.
+    half2 a = max(half2(half(squared * invDistance) * -0.00425531901 + 1.0, cosines.x), 0.0);
+    a = a * a;
+    half cone = min((a.x * 3.5) * (a.y * a.y), 2.70000005);
+    half intensity = cone * abs(half(vTex1.w * invDistance));
+    half edge = 1.0 - abs(cosines.y);
+    half rim = max(edge * (edge * edge) + -0.400000006, 0.0) * 2.47000003;
+    half head = min(intensity * rim, 2.0);
+    half4 result = half4(tex.rgb * (head + half3(vColor.rgb)), tex.a * half(vColor.a));
+#ifdef ATEST
+    if (half(uAlphaTest.x) * result.a < half(uAlphaTest.y))
+        discard;
+#endif
+    result.rgb = min(result.rgb, 1.0) * vColor1.a + vColor1.rgb;
+    return result;
+}

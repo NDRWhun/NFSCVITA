@@ -1,0 +1,20 @@
+// Ghost car (GHOSTCAR ghostcar, shader 2, vs_2_0). Registers: WorldViewProj c0-c3, cmWorldView c4-c6,
+// cvLocalEyePos c7, cvEnvmapMin c8, cvEnvmapRange c9, cvClampAndScales c10. Outputs: the eye direction reflected
+// about the normal in view space, and the envmap colour c8 + c9 * min(saturate(e . n), c10.y) * c10.w.
+
+void main(
+    float4 aPosition,
+    float3 aNormal,
+    uniform float4 uC[11],
+    float4 out vPosition : POSITION,
+    float4 out vColor : COLOR0,
+    float3 out vTex0 : TEXCOORD0)
+{
+    vPosition = float4(dot(aPosition, uC[0]), dot(aPosition, uC[1]), dot(aPosition, uC[2]), dot(aPosition, uC[3]));
+    float3 e = normalize(uC[7].xyz - aPosition.xyz);
+    float en = dot(e, aNormal);
+    float3 r = aNormal * (2.0 * en) - e;
+    vTex0 = float3(dot(r, uC[4].xyz), dot(r, uC[5].xyz), dot(r, uC[6].xyz));
+    float facing = min(saturate(en), uC[10].y) * uC[10].w;
+    vColor = saturate(float4(facing * uC[9].xyz + uC[8].xyz, 0.0));
+}

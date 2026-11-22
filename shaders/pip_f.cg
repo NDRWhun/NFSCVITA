@@ -1,0 +1,45 @@
+// Picture-in-picture (ps_2_0): the view texel (sampler 1) times cvVisualTreatmentParams.x (c0) looks up the colour
+// cube (sampler 2, a volume stored as an atlas, uVol); alpha from the opacity map (sampler 0). RVM (the rear-view
+// mirror): the alpha times the vertex colour's blue.
+
+// A volume atlas: slices side by side; uVol = (depth, 1 / depth, 0.5 / width, 1 - 0.5 / width).
+half4 volume(sampler2D atlas, float3 c, float4 uVol)
+{
+    float z = saturate(c.z) * uVol.x - 0.5;
+    float z0 = floor(z);
+    float f = z - z0;
+    float u = clamp(c.x, uVol.z, uVol.w);
+    float s0 = clamp(z0, 0.0, uVol.x - 1.0);
+    float s1 = clamp(z0 + 1.0, 0.0, uVol.x - 1.0);
+    half4 a = tex2D<half4>(atlas, float2((s0 + u) * uVol.y, c.y));
+    half4 b = tex2D<half4>(atlas, float2((s1 + u) * uVol.y, c.y));
+    return lerp(a, b, half(f));
+}
+
+float4 main(
+#ifdef RVM
+    half4 vColor : COLOR0,
+#endif
+    float2 vTex0 : TEXCOORD0,
+    float2 vTex1 : TEXCOORD1,
+    uniform sampler2D uTex0,
+    uniform sampler2D uTex1,
+    uniform sampler2D uTex2,
+    uniform float4 uC[1],
+    uniform float4 uVol,
+    uniform float4 uAlphaTest) : COLOR
+{
+    half4 r0 = tex2D<half4>(uTex1, vTex1);
+    r0.rgb = r0.rgb * half(uC[0].x);
+    half4 r1 = volume(uTex2, float3(r0.rgb), uVol);
+    half4 c = tex2D<half4>(uTex0, vTex0);
+    c.rgb = r1.rgb;
+#ifdef RVM
+    c.a = c.a * vColor.b;
+#endif
+#ifdef ATEST
+    if (uAlphaTest.x * saturate(c.a) < uAlphaTest.y)
+        discard;
+#endif
+    return c;
+}

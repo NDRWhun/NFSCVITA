@@ -1,0 +1,17 @@
+// Car glass at low detail (lowlod, ps_2_0): the texel times the vertex colour, alpha 1.
+
+float4 main(
+    float4 vColor : COLOR0,
+    float2 vTex0 : TEXCOORD0,
+    uniform sampler2D uTex0,
+    uniform float4 uAlphaTest) : COLOR
+{
+    half4 c = tex2D<half4>(uTex0, vTex0);
+    c.rgb = c.rgb * half3(vColor.rgb);
+    c.a = 1.0;
+#ifdef ATEST
+    if (uAlphaTest.x * saturate(c.a) < uAlphaTest.y)
+        discard;
+#endif
+    return c;
+}

@@ -1,0 +1,51 @@
+// Road (WORLDREFLECT dryroad and raining_on_road, shader 2, ps_2_0). Samplers: diffuse s0, reflection s1 (read
+// projectively, shifted by the normal's x), normal map s2, headlight pattern s3. The normal-map normal in the
+// tangent frame gives the headlight facing term and shades the vertex colour; the headlight (range, cone, pattern
+// across its side and up) and the reflection's alpha brighten it, capped at luminance 1.8; times the diffuse texel
+// plus the reflection times the texel's alpha and vColor.a; alpha 1; then the fixed-function fog: vColor1 =
+// (fog colour * (1 - factor), factor).
+
+float4 main(
+    half4 vColor : COLOR0,
+    half4 vColor1 : COLOR1,
+    float2 vTex0 : TEXCOORD0,
+    float3 vTex1 : TEXCOORD1,
+    float3 vTex2 : TEXCOORD2,
+    half3 vTex3 : TEXCOORD3_HALF,
+    half3 vTex4 : TEXCOORD4_HALF,
+    half3 vTex5 : TEXCOORD5_HALF,
+    half3 vTex6 : TEXCOORD6_HALF,
+    uniform sampler2D uTex0,
+    uniform sampler2D uTex1,
+    uniform sampler2D uTex2,
+    uniform sampler2D uTex3,
+    uniform float4 uAlphaTest) : COLOR
+{
+    half3 m = tex2D<half4>(uTex2, vTex0).xyz * 2.0 - 1.0;
+    half3 n = vTex4 * m.x + vTex5 * m.y + vTex6 * m.z;
+    float squared = dot(vTex2, vTex2);
+    float invDistance = rsqrt(squared);
+    half inv = half(invDistance);
+    half3 cosines = vTex3 * inv;
+    half facing = saturate(dot(half3(vTex2 * invDistance), n)) + 0.0700000003;
+    half2 a = saturate(half2(half(squared * invDistance) * -0.00425531901 + 1.0, cosines.x));
+    a = a * a;
+    half intensity = (a.x * 7.69999981) * (a.y * a.y) * facing;
+    half3 pattern = tex2D<half4>(uTex3, float2((cosines.y + 1.0) * 0.5,
+                                               (cosines.z + 0.850000024) * 0.588235319)).rgb;
+    half4 reflection = tex2D<half4>(uTex1, float2(vTex1.x + float(n.x) * 0.5, vTex1.y) / vTex1.z);
+    half4 tex = tex2D<half4>(uTex0, vTex0);
+    half z = abs(n.z);
+    half3 shade = (n.y * z) * (vColor.rgb * 0.5 + 0.400000006) + vColor.rgb;
+    half3 light = pow(z, 0.200000003) * (intensity * pattern) + shade;
+    light = (reflection.a * (tex.a + 0.400000006)) * 1.5 + light;
+    half lum = dot(half3(0.212500006, 0.715399981, 0.0720999986), light);
+    light = light * (min(max(lum, 0.0), 1.79999995) / lum);
+    half4 result = half4(light * tex.rgb + reflection.rgb * (tex.a * vColor.a), 1.0);
+#ifdef ATEST
+    if (half(uAlphaTest.x) < half(uAlphaTest.y))
+        discard;
+#endif
+    result.rgb = saturate(result.rgb) * vColor1.a + vColor1.rgb;
+    return result;
+}

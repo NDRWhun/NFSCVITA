@@ -1,0 +1,59 @@
+// Particles (PARTICLES fuzzz and no_fuzzz, vs_1_1). Registers: cavLightColours c0-c9, cavLightPositions c10-c19,
+// cavLightDirections c20-c29, WorldViewProj c30-c33, cmWorldMat c34-c36, cmWorldView c37-c39, cvTextureOffset c40,
+// cvLocalEyePos c41. A billboard: the view's right and up axes rotated about the view axis by TEXCOORD1.z (when
+// positive) and scaled by TEXCOORD1.xy offset the centre; the corner's screen distance from the centre is capped at
+// 0.65. Outputs: twice the colour, the light's colour by its cone (light index TEXCOORD2.x), the texture
+// coordinate, the light direction and the half vector of light and eye in the billboard's frame (normalized here;
+// the screen coordinates of the soft-particle test are not read by the pixel shader).
+
+void main(
+    float4 aPosition,
+    float4 aColor,
+    float2 aTex0,
+    float4 aTex1,
+    float aTex2,
+    uniform float4 uC[42],
+    float4 out vPosition : POSITION,
+    float4 out vColor : COLOR0,
+    float4 out vColor1 : COLOR1,
+    float2 out vTex0 : TEXCOORD0,
+    half3 out vTex1 : TEXCOORD1_HALF,
+    half3 out vTex2 : TEXCOORD2_HALF)
+{
+    // Rotation about the view axis a by the angle (Rodrigues), applied to the right and up axes.
+    float s = sin(aTex1.z), c = cos(aTex1.z);
+    float3 a = normalize(uC[39].xyz);
+    float3 k = (1.0 - c) * a;
+    float3 sa = s * a;
+    float3 r0 = float3(k.x * a.x + c, k.y * a.x - sa.z, k.z * a.x + sa.y);
+    float3 r1 = float3(k.x * a.y + sa.z, k.y * a.y + c, k.z * a.y - sa.x);
+    float3 r2 = float3(k.x * a.z - sa.y, k.y * a.z + sa.x, k.z * a.z + c);
+    float3 right = float3(dot(uC[37].xyz, r0), dot(uC[37].xyz, r1), dot(uC[37].xyz, r2));
+    float3 up = float3(dot(uC[38].xyz, r0), dot(uC[38].xyz, r1), dot(uC[38].xyz, r2));
+    if (!(aTex1.z > 0.0))
+    {
+        right = uC[37].xyz;
+        up = uC[38].xyz;
+    }
+
+    float3 world = float3(dot(aPosition, uC[34]), dot(aPosition, uC[35]), dot(aPosition, uC[36]));
+    float3 eye = normalize(uC[41].xyz - world);
+    int light = int(aTex2);
+    float3 l = normalize(uC[10 + light].xyz - world);
+    float3 eyeFrame = float3(dot(eye, right), dot(eye, up), dot(eye, -uC[39].xyz));
+    float3 lightFrame = float3(dot(l, right), dot(l, up), dot(l, -uC[39].xyz));
+    float cone = saturate(dot(l, -uC[20 + light].xyz));
+    vTex1 = half3(normalize(lightFrame));
+    vTex2 = half3(normalize((eyeFrame + lightFrame) * 0.5));
+    vColor1 = float4(saturate(cone * uC[light].rgb), 0.0);
+
+    float4 corner = float4(right * aTex1.x + up * aTex1.y + aPosition.xyz, aPosition.w);
+    float4 hc = float4(dot(corner, uC[30]), dot(corner, uC[31]), dot(corner, uC[32]), dot(corner, uC[33]));
+    float4 h = float4(dot(aPosition, uC[30]), dot(aPosition, uC[31]), dot(aPosition, uC[32]), dot(aPosition, uC[33]));
+    float2 d = hc.xy / hc.w - h.xy / h.w;
+    float invLength = rsqrt(dot(d, d));
+    float scale = min(1.0 / invLength, 0.649999976) * invLength;
+    vPosition = scale * (hc - h) + h;
+    vColor = saturate(aColor.zyxw * 2.0);
+    vTex0 = aTex0 + uC[40].xy;
+}

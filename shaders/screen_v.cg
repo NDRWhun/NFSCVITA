@@ -1,0 +1,12 @@
+// Full-screen passes (vs_1_1 and vs_2_0 of the screen effects and the visual treatment): position and texture
+// coordinate as given.
+
+void main(
+    float4 aPosition,
+    float2 aTex0,
+    float4 out vPosition : POSITION,
+    float2 out vTex0 : TEXCOORD0)
+{
+    vPosition = aPosition;
+    vTex0 = aTex0;
+}

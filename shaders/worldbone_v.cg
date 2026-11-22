@@ -1,0 +1,27 @@
+// Skinned world objects (WORLDBONE world, vs_1_1). Registers: camBlendMatrices c0-c63, WorldViewProj c64-c67
+// (c68-c71: the unread lighting constants). The
+// position skinned by three bones (blended in the order y, x, z) and the texture coordinate; the lighting outputs
+// of the shader are not read by its pixel shader and are left out.
+
+void main(
+    float3 aPosition,
+    float2 aTex0,
+    float3 aWeight,
+    float3 aIndex,
+    uniform float4 uC[72],
+    float4 out vPosition : POSITION,
+    float2 out vTex0 : TEXCOORD0)
+{
+    float4 p = float4(aPosition, 1.0);
+    int3 bone = int3((aIndex - frac(aIndex)) * 4.0);
+    float4 m[4];
+    for (int i = 0; i < 4; ++i)
+    {
+        float4 b = aWeight.y * uC[i + bone.y];
+        b = uC[i + bone.x] * aWeight.x + b;
+        m[i] = uC[i + bone.z] * aWeight.z + b;
+    }
+    float4 skinned = float4(dot(p, m[0]), dot(p, m[1]), dot(p, m[2]), dot(p, m[3]));
+    vPosition = float4(dot(skinned, uC[64]), dot(skinned, uC[65]), dot(skinned, uC[66]), dot(skinned, uC[67]));
+    vTex0 = aTex0;
+}

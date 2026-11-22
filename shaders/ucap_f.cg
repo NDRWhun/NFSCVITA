@@ -1,0 +1,50 @@
+// Characters (UCAP main, shader 2, ps_2_0). Registers: cmLocalDirectionMatrix c0-c3, cmLocalColourMatrix c4-c6,
+// cvSpecularMin c7, cvSpecularRange c8, cvPowers c9, cvVinylScales c10. The height map (sampler 1) linearised by 2.2
+// and the specular map (sampler 0) give the skin colour under three wrapped diffuse terms and two specular lights;
+// the result is raised to 1 / 1.7, alpha 1. The specular map's red and green are replaced by those terms before use,
+// as in the bytecode.
+
+float4 main(
+    float2 vTex0 : TEXCOORD0,
+    float3 vTex1 : TEXCOORD1,
+    float4 vTex2 : TEXCOORD2,
+    float3 vTex3 : TEXCOORD3,
+    uniform sampler2D uTex0,
+    uniform sampler2D uTex1,
+    uniform float4 uC[11],
+    uniform float4 uAlphaTest) : COLOR
+{
+    half4 height = tex2D<half4>(uTex1, vTex0);
+    half4 spec = tex2D<half4>(uTex0, vTex0);
+    half3 lin = log2(abs(height.rgb)) * 2.20000005;
+    half3 n = normalize(half3(vTex3));
+    half d0 = saturate(dot(half3(uC[0].xyz), n));
+    half w = pow(d0, 1.5);
+    half d1 = saturate(dot(half3(uC[1].xyz), n));
+    half d2 = saturate(dot(half3(uC[2].xyz), n));
+    half wrap = spec.b * (d1 * d1) + w;
+    wrap = d2 + wrap;
+    half3 colour = exp2(lin);
+    half grey = dot(half3(0.212500006, 0.715399981, 0.0720999986), half3(wrap * 0.100000001));
+    half3 specSum = half3(uC[7].xyz) + half3(uC[8].xyz);
+    half mixed = wrap * 0.100000001 - grey;
+    colour = colour * specSum;
+    mixed = half(uC[10].x) * mixed + grey;
+    half3 diffuse = colour * (mixed * half3(vTex2.xyz));
+    diffuse = diffuse * 10.0;
+    half3 r = normalize(half3(vTex1));
+    half s0 = saturate(dot(half3(uC[0].xyz), r));
+    half s3 = saturate(dot(half3(uC[3].xyz), r));
+    half3 light0 = (half3(uC[4].x, uC[5].x, uC[6].x) * half3(uC[7].xyz)) * pow(s0, half(uC[9].y));
+    light0 = spec.a * light0;
+    half3 c = diffuse * (spec.a * 0.300000012 + 0.699999988) + light0;
+    half3 light3 = pow(s3, half(uC[9].y)) * (half3(uC[4].w, uC[5].w, uC[6].w) * half3(uC[7].xyz));
+    c = light3 * spec.a + c;
+    c = colour * half(uC[9].z) + c;
+    half4 result = half4(exp2(log2(abs(c)) * 0.588235319), 1.0);
+#ifdef ATEST
+    if (uAlphaTest.x * saturate(result.a) < uAlphaTest.y)
+        discard;
+#endif
+    return result;
+}

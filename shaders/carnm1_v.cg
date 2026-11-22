@@ -1,0 +1,59 @@
+// Normal-mapped car (CARNORMALMAP car_normalmap, shader 1, vs_1_1). Registers: cavHarmonicCoeff c0-c9,
+// WorldViewProj c10-c13, cvFogValue c14, cfFogEnable c15, cvLocalEyePos c16, cvDiffuseMin c17, cvDiffuseRange c18,
+// cvEnvmapMin c19, cvEnvmapRange c20, cvPowers c21, cvClampAndScales c22, cvFlakes c23. Outputs: the harmonic diffuse
+// colour, the envmap colour with the flake factor, the texture coordinate and the fog (uFog: colour, enable) as
+// TEXCOORD2 = (fog colour * (1 - factor), factor).
+
+// The lit instruction's z: x > 0 and y > 0 ? y^w (w clamped to +-127.9961) : 0.
+float litZ(float x, float y, float w)
+{
+#ifdef LIT_BRANCH
+    return x > 0.0 && y > 0.0 ? pow(y, clamp(w, -127.9961, 127.9961)) : 0.0;
+#else
+    // The power computed for every vertex and selected: no branch, so the program runs in parallel mode.
+    float p = exp2(clamp(w, -127.9961, 127.9961) * log2(abs(y)));
+    return x > 0.0 && y > 0.0 ? p : 0.0;
+#endif
+}
+
+void main(
+    float4 aPosition,
+    float3 aNormal,
+    float2 aTex0,
+    uniform float4 uC[24],
+    uniform float4 uFog,
+    float4 out vPosition : POSITION,
+    float4 out vColor : COLOR0,
+    float4 out vColor1 : COLOR1,
+    float2 out vTex1 : TEXCOORD1,
+    half4 out vTex2 : TEXCOORD2_HALF)
+{
+    float3 n = aNormal;
+    float z = dot(aPosition, uC[12]);
+    vPosition = float4(dot(aPosition, uC[10]), dot(aPosition, uC[11]), z, dot(aPosition, uC[13]));
+    float g = 1.0 - saturate((uC[14].x - z) * uC[14].y);
+    float haze = saturate((litZ(g, g, uC[14].w) * uC[14].z) * uC[15].x) * uFog.w;
+    vTex2 = half4(uFog.rgb * haze, 1.0 - haze);
+
+    float3 e = normalize(uC[16].xyz - aPosition.xyz);
+    float s = saturate(dot(e, n));
+    float4 sq = n.xyzy * n.xyzx;
+    float3 h = uC[1].xyz * sq.x + uC[0].xyz;
+    h = uC[2].xyz * sq.y + h;
+    h = uC[3].xyz * sq.z + h;
+    h = uC[4].xyz * sq.w + h;
+    float2 mixed = n.xz * n.zy;
+    h = uC[5].xyz * mixed.x + h;
+    h = uC[6].xyz * mixed.y + h;
+    h = uC[7].xyz * n.x + h;
+    h = uC[8].xyz * n.y + h;
+    h = uC[9].xyz * n.z + h;
+    float diffusePower = min(litZ(s, s, uC[21].x), uC[22].x) * uC[22].z;
+    float4 diffuse = diffusePower * uC[18] + uC[17];
+    float flake = diffusePower * uC[23].w + uC[23].z;
+    vColor = saturate(float4(h * diffuse.xyz, diffuse.w));
+    float lum = dot(float3(0.212500006, 0.715399981, 0.0720999986), h);
+    float envPower = min(litZ(s, s, uC[21].z), uC[22].y) * uC[22].w;
+    vColor1 = saturate(float4(envPower * uC[20].xyz + uC[19].xyz, flake * lum));
+    vTex1 = aTex0;
+}

@@ -1,0 +1,18 @@
+// FE mask (vs_1_1): position by WorldViewProj (c0-c3), colour times (2, 2, 2, 1) clamped, two texture coordinates.
+
+void main(
+    float4 aPosition,
+    float4 aColor,
+    float2 aTex0,
+    float2 aTex1,
+    uniform float4 uC[4],
+    float4 out vPosition : POSITION,
+    float4 out vColor : COLOR0,
+    float2 out vTex0 : TEXCOORD0,
+    float2 out vTex1 : TEXCOORD1)
+{
+    vPosition = float4(dot(aPosition, uC[0]), dot(aPosition, uC[1]), dot(aPosition, uC[2]), dot(aPosition, uC[3]));
+    vColor = saturate(aColor.zyxw * float4(2.0, 2.0, 2.0, 1.0));
+    vTex0 = aTex0;
+    vTex1 = aTex1;
+}

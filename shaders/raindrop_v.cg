@@ -1,0 +1,11 @@
+// Rain drops on the screen (RAIN_DROP filter, vs_1_1): position and texture coordinate as given.
+
+void main(
+    float4 aPosition,
+    float2 aTex0,
+    float4 out vPosition : POSITION,
+    float2 out vTex0 : TEXCOORD0)
+{
+    vPosition = aPosition;
+    vTex0 = aTex0;
+}

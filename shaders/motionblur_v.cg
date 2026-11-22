@@ -1,0 +1,21 @@
+// Motion blur (VISUALTREATMENT motionblur, vs_3_0): position as given; of the eight tap coordinates the pixel
+// program reads every second one (0, 2, 4, 6 as TEXCOORD0-3).
+
+void main(
+    float4 aPosition,
+    float2 aTex0,
+    float2 aTex2,
+    float2 aTex4,
+    float2 aTex6,
+    float4 out vPosition : POSITION,
+    float2 out vTex0 : TEXCOORD0,
+    float2 out vTex1 : TEXCOORD1,
+    float2 out vTex2 : TEXCOORD2,
+    float2 out vTex3 : TEXCOORD3)
+{
+    vPosition = aPosition;
+    vTex0 = aTex0;
+    vTex1 = aTex2;
+    vTex2 = aTex4;
+    vTex3 = aTex6;
+}

@@ -1,0 +1,25 @@
+// FE world (ps_1_1): texel times vertex colour. Stage 0 coordinates are divided by z or w when the stage's texture
+// transform flags project them (uProj: z, w selectors and 1 without projection). FOG: then the fixed-function fog,
+// vColor1 = (fog colour * (1 - factor), factor), for the vertex programs that write it.
+
+float4 main(
+    float4 vColor : COLOR0,
+#ifdef FOG
+    half4 vColor1 : COLOR1,
+#endif
+    float4 vTex0 : TEXCOORD0,
+    uniform sampler2D uTex0,
+    uniform float4 uProj,
+    uniform float4 uAlphaTest) : COLOR
+{
+    half4 t0 = tex2Dproj<half4>(uTex0, float3(vTex0.xy, dot(float3(vTex0.zw, 1.0), uProj.xyz)));
+    half4 c = t0 * half4(vColor);
+#ifdef ATEST
+    if (uAlphaTest.x * saturate(c.a) < uAlphaTest.y)
+        discard;
+#endif
+#ifdef FOG
+    c.rgb = c.rgb * vColor1.a + vColor1.rgb;
+#endif
+    return c;
+}

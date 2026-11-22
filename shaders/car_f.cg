@@ -1,0 +1,55 @@
+// Car (shader 2, ps_2_0). Registers: cmLocalDirectionMatrix c0-c2 (light directions), cmLocalColourMatrix c3-c5
+// (light colours by column), cvSpecularMin c6, cvSpecularRange c7, cvPowers c8, cvVinylScales c9. The diffuse texel
+// (bias from the coordinate's w) blends the vinyl over the paint, the envmap (cube, sampler 1) and three specular
+// lights are added; then the fixed-function vertex fog (factor in vTex3.w; uFog: colour, enable).
+
+float4 main(
+    float4 vColor : COLOR0,
+    float4 vColor1 : COLOR1,
+    float4 vTex0 : TEXCOORD0,
+    float4 vTex1 : TEXCOORD1,
+    float4 vTex2 : TEXCOORD2,
+    float4 vTex3 : TEXCOORD3,
+    uniform sampler2D uTex0,
+    uniform samplerCUBE uTex1,
+    uniform float4 uC[10],
+    uniform float4 uFog,
+    uniform float4 uAlphaTest) : COLOR
+{
+    half4 env = texCUBE<half4>(uTex1, vTex0.xyz);
+    half4 tex = tex2Dbias<half4>(uTex0, float4(vTex1.xy, 0.0, vTex1.w));
+    half4 v0 = half4(vColor);
+    half4 v1 = half4(vColor1);
+    half3 e = normalize(half3(vTex2.xyz));
+    half3 n = normalize(half3(vTex3.xyz));
+    half en2 = dot(-e, n) + dot(-e, n);
+    half3 r = n * -en2 + -e;
+    half3 specRange = half3(uC[7].xyz), specMin = half3(uC[6].xyz);
+    half power = half(uC[8].y);
+
+    half p = saturate(pow(saturate(dot(half3(uC[0].xyz), r)), power));
+    half3 spec0 = p * ((p * specRange + specMin) * half3(uC[3].x, uC[4].x, uC[5].x));
+
+    half envMask = 1.0 - min(tex.a, max(half(uC[9].z), 0.0));
+    half3 reflection = env.rgb * v1.rgb * envMask;
+    reflection = half3(float3(reflection) * vTex0.w);
+    half3 vinyl = half(uC[9].x) * (v0.rgb - v1.a) + v1.a;
+    half3 base = vinyl * tex.rgb - v0.rgb;
+    base = tex.a * base + v0.rgb;
+    half specMask = 1.0 - min(tex.a, max(half(uC[9].y), 0.0));
+    half3 c = 2.0 * reflection + base;
+    c = spec0 * specMask + c;
+
+    p = saturate(pow(saturate(dot(half3(uC[1].xyz), r)), power));
+    c = (p * ((p * specRange + specMin) * half3(uC[3].y, uC[4].y, uC[5].y))) * specMask + c;
+    p = saturate(pow(saturate(dot(half3(uC[2].xyz), r)), power));
+    half4 result = half4((p * ((p * specRange + specMin) * half3(uC[3].z, uC[4].z, uC[5].z))) * specMask + c,
+                         tex.a * v0.a);
+#ifdef ATEST
+    if (uAlphaTest.x * saturate(result.a) < uAlphaTest.y)
+        discard;
+#endif
+    half f = max(saturate(half(vTex3.w)), half(1.0 - uFog.w));
+    result.rgb = lerp(half3(uFog.rgb), result.rgb, f);
+    return result;
+}

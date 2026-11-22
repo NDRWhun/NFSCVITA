@@ -1,0 +1,11 @@
+// Screen filter (vs_1_1): position and texture coordinate as given (the paired programs never read the colour).
+
+void main(
+    float4 aPosition,
+    float4 aTex0,
+    float4 out vPosition : POSITION,
+    float4 out vTex0 : TEXCOORD0)
+{
+    vPosition = aPosition;
+    vTex0 = aTex0;
+}

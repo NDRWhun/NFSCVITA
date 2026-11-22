@@ -1,0 +1,18 @@
+// Prelit world (ps_1_1): texel times vertex colour, doubled (mul_x2); then the fixed-function fog: vColor1 =
+// (fog colour * (1 - factor), factor).
+
+float4 main(
+    half4 vColor : COLOR0,
+    half4 vColor1 : COLOR1,
+    float2 vTex0 : TEXCOORD0,
+    uniform sampler2D uTex0,
+    uniform float4 uAlphaTest) : COLOR
+{
+    half4 c = min(tex2D<half4>(uTex0, vTex0) * vColor * 2.0, 1.0);
+#ifdef ATEST
+    if (half(uAlphaTest.x) * c.a < half(uAlphaTest.y))
+        discard;
+#endif
+    c.rgb = c.rgb * vColor1.a + vColor1.rgb;
+    return c;
+}

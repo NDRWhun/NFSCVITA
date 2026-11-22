@@ -1,0 +1,35 @@
+// Prelit world (vs_1_1). Registers: WorldViewProj c0-c3, cvFogValue c4, cfFogEnable c5. The vertex colour and
+// texture coordinate as given; the fog (uFog: colour, enable) as COLOR1 = (fog colour * (1 - factor), factor).
+
+// The lit instruction's z: x > 0 and y > 0 ? y^w (w clamped to +-127.9961) : 0.
+float litZ(float x, float y, float w)
+{
+#ifdef LIT_BRANCH
+    return x > 0.0 && y > 0.0 ? pow(y, clamp(w, -127.9961, 127.9961)) : 0.0;
+#else
+    // The power computed for every vertex and selected: no branch, so the program runs in parallel mode.
+    float p = exp2(clamp(w, -127.9961, 127.9961) * log2(abs(y)));
+    return x > 0.0 && y > 0.0 ? p : 0.0;
+#endif
+}
+
+void main(
+    float4 aPosition,
+    float4 aColor,
+    float2 aTex0,
+    uniform float4 uC[6],
+    uniform float4 uFog,
+    float4 out vPosition : POSITION,
+    float4 out vColor : COLOR0,
+    float4 out vColor1 : COLOR1,
+    float2 out vTex0 : TEXCOORD0)
+{
+    float z = dot(aPosition, uC[2]);
+    vPosition = float4(dot(aPosition, uC[0]), dot(aPosition, uC[1]), z, dot(aPosition, uC[3]));
+    // Fog: 1 - cfFogEnable * fog.z * (1 - saturate((fog.x - z) * fog.y))^fog.w.
+    float g = 1.0 - saturate((uC[4].x - z) * uC[4].y);
+    float haze = saturate((litZ(g, g, uC[4].w) * uC[4].z) * uC[5].x) * uFog.w;
+    vColor1 = float4(uFog.rgb * haze, 1.0 - haze);
+    vColor = aColor.zyxw;
+    vTex0 = aTex0;
+}

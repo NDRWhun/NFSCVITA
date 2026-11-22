@@ -1,0 +1,20 @@
+// Canyon edge darkening (uvesovercliffdarken, ps_2_0): the texel's colour blended toward cvVisualEffectFadeColour
+// (c0) by its alpha; alpha the texel's.
+
+float4 main(
+    float2 vTex0 : TEXCOORD0,
+    uniform sampler2D uTex0,
+    uniform float4 uC[1],
+    uniform float4 uAlphaTest) : COLOR
+{
+    half4 r1 = tex2D<half4>(uTex0, vTex0);
+    half4 fade = half4(uC[0]);
+    half4 c;
+    c.rgb = fade.a * (fade.rgb - r1.rgb) + r1.rgb;
+    c.a = r1.a;
+#ifdef ATEST
+    if (uAlphaTest.x * saturate(c.a) < uAlphaTest.y)
+        discard;
+#endif
+    return c;
+}

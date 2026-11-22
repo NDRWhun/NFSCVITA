@@ -1,0 +1,17 @@
+// Instanced meshes (INSTANCEMESH TShader_Instancing, vs_2_0). Registers: INSTANCEMATRICES c0-c199 (four registers
+// per instance), INSTANCECOLORS c200-c249. The instance index is the integer part of TEXCOORD1.x: the position by
+// the instance's matrix, the instance's colour.
+
+void main(
+    float3 aPosition,
+    float aTex1,
+    uniform float4 uC[250],
+    float4 out vPosition : POSITION,
+    float4 out vColor : COLOR0)
+{
+    float index = aTex1 - frac(aTex1);
+    int m = int(index * 4.0);
+    float4 p = float4(aPosition, 1.0);
+    vPosition = float4(dot(p, uC[m]), dot(p, uC[m + 1]), dot(p, uC[m + 2]), dot(p, uC[m + 3]));
+    vColor = saturate(uC[200 + int(index)]);
+}

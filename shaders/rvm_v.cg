@@ -1,0 +1,19 @@
+// Rear-view mirror (RVMPIP rvm, vs_2_0): position, colour and coordinate 0 as given; coordinate 1 is coordinate 0
+// with v moved by 0.25, up where v is 0 and down elsewhere.
+
+void main(
+    float4 aPosition,
+    float4 aColor,
+    float4 aTex0,
+    float4 out vPosition : POSITION,
+    float4 out vColor : COLOR0,
+    float2 out vTex0 : TEXCOORD0,
+    float2 out vTex1 : TEXCOORD1)
+{
+    float y2 = aTex0.y * aTex0.y;
+    float s = -y2 >= y2 ? 1.0 : 0.0;
+    vPosition = aPosition;
+    vColor = aColor.zyxw;
+    vTex0 = aTex0.xy;
+    vTex1 = float2(aTex0.x, s * 0.5 + aTex0.y + -0.25);
+}

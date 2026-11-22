@@ -1,0 +1,27 @@
+// Road at shader 1 (WORLDREFLECT dryroad and raining_on_road, ps_1_1). Register: headlight_colour_scale c0
+// (clamped). Samplers: diffuse s0, headlight s1 (read projectively), headlight clip map s2. The texel times the
+// vertex colour plus the headlight times the clip map and c0.x; then the fog: vColor1 = (fog colour *
+// (1 - factor), factor).
+
+float4 main(
+    half4 vColor : COLOR0,
+    half4 vColor1 : COLOR1,
+    float2 vTex0 : TEXCOORD0,
+    float3 vTex1 : TEXCOORD1,
+    float2 vTex2 : TEXCOORD2,
+    uniform sampler2D uTex0,
+    uniform sampler2D uTex1,
+    uniform sampler2D uTex2,
+    uniform float4 uC[1],
+    uniform float4 uAlphaTest) : COLOR
+{
+    half4 c = tex2D<half4>(uTex0, vTex0) * vColor;
+    half3 head = tex2Dproj<half4>(uTex1, vTex1).rgb * half(uC[0].x);
+    c.rgb = saturate(tex2D<half4>(uTex2, vTex2).rgb * head + c.rgb);
+#ifdef ATEST
+    if (half(uAlphaTest.x) * c.a < half(uAlphaTest.y))
+        discard;
+#endif
+    c.rgb = c.rgb * vColor1.a + vColor1.rgb;
+    return c;
+}

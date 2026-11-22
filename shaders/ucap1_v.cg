@@ -1,0 +1,36 @@
+// Characters at shader 1 (UCAP main_1_1, vs_1_1). Registers: camBlendMatrices c0-c63, WorldViewProj c64-c67,
+// cavPcaWeightsX/Y/Z c68-c79. The position is rebuilt from the four PCA coordinate sets and skinned by three bones
+// (blended in the order y, x, z); only the texture coordinate is passed on, the one input the pixel shader reads.
+
+// Sum of the four PCA dot products of an axis, in order (registers first..first+3).
+float pca(float4 uC[80], int first, float4 t[4])
+{
+    return dot(uC[first], t[0]) + dot(uC[first + 1], t[1]) + dot(uC[first + 2], t[2]) + dot(uC[first + 3], t[3]);
+}
+
+void main(
+    float2 aTex0,
+    float4 aWeight,
+    float4 aIndex,
+    float4 aTex1,
+    float4 aTex2,
+    float4 aTex3,
+    float4 aTex4,
+    uniform float4 uC[80],
+    float4 out vPosition : POSITION,
+    float2 out vTex0 : TEXCOORD0)
+{
+    float4 t[4] = { aTex1, aTex2, aTex3, aTex4 };
+    float4 p = float4(pca(uC, 68, t), pca(uC, 72, t), pca(uC, 76, t), 1.0);
+    int3 bone = int3((aIndex.xyz - frac(aIndex.xyz)) * 4.0);
+    float4 m[4];
+    for (int i = 0; i < 4; ++i)
+    {
+        float4 b = aWeight.y * uC[i + bone.y];
+        b = uC[i + bone.x] * aWeight.x + b;
+        m[i] = uC[i + bone.z] * aWeight.z + b;
+    }
+    float4 skinned = float4(dot(p, m[0]), dot(p, m[1]), dot(p, m[2]), dot(p, m[3]));
+    vPosition = float4(dot(skinned, uC[64]), dot(skinned, uC[65]), dot(skinned, uC[66]), dot(skinned, uC[67]));
+    vTex0 = aTex0;
+}

@@ -1,0 +1,58 @@
+// Car glass (shader 2, ps_2_0). Registers: cmWorldMatTranspose c0-c2, cfFogEnable c3 (headlight scale),
+// cavWorldHeadlightDirection c4, cavWorldHeadlightUpDirection c5, cavWorldHeadlightPosition c6. The headlight
+// (projected texture, sampler 2) lights the diffuse texel with the vertex colour, the envmap (cube, sampler 1) blends
+// over by the texel's alpha; then the fixed-function vertex fog (factor in vTex2.w; uFog: colour, enable).
+
+float4 main(
+    float4 vColor : COLOR0,
+    float2 vTex0 : TEXCOORD0,
+    float3 vTex1 : TEXCOORD1,
+    float4 vTex2 : TEXCOORD2,
+    float3 vTex3 : TEXCOORD3,
+    uniform sampler2D uTex0,
+    uniform samplerCUBE uTex1,
+    uniform sampler2D uTex2,
+    uniform float4 uC[7],
+    uniform float4 uFog,
+    uniform float4 uAlphaTest) : COLOR
+{
+    float3 l = -vTex3 + uC[6].xyz;
+    float invDistance = rsqrt(dot(l, l));
+    float range = 1.0 / invDistance;
+    l = l * invDistance;
+    float atten = saturate(range * -0.00425531901 + 1.0);
+    atten = atten * atten;
+    float spot = saturate(dot(l, -uC[4].xyz));
+    half k = half(atten) * 3.5;
+    float3 normal = vTex2.y * uC[1].xyz;
+    half cone = pow(half(spot), 5.69999981);
+    normal = uC[0].xyz * vTex2.x + normal;
+    cone = k * cone;
+    normal = float3(half3(uC[2].xyz * vTex2.z + normal));
+    float intensity = min(float(cone), 2.70000005);
+    intensity = intensity * saturate(abs(dot(l, normal)));
+    float up = dot(l, uC[5].xyz);
+    float edge = -abs(up) + 1.0;
+    float3 side = uC[4].yzx * uC[5].zxy - uC[4].zxy * uC[5].yzx;
+    half rim = half(saturate(edge * (edge * edge) + -0.400000006));
+    float across = dot(l, -side) + 1.0;
+    rim = rim * 2.47000003;
+    intensity = intensity * float(rim);
+    float2 uv = float2(half(across) * 0.5, half(up + 1.0) * 0.5);
+    float4 light = tex2D(uTex2, uv);
+    half4 tex = tex2D<half4>(uTex0, vTex0);
+    half4 env = texCUBE<half4>(uTex1, vTex1);
+    half3 head = half3(intensity * light.rgb);
+    head = min(max(head, 0.0), 2.0);
+    head = half(uC[3].x) * head + half3(vColor.rgb);
+    half blend = saturate(tex.a);
+    tex.rgb = tex.rgb * head;
+    half4 result = lerp(tex, env, blend);
+#ifdef ATEST
+    if (uAlphaTest.x * saturate(result.a) < uAlphaTest.y)
+        discard;
+#endif
+    half f = max(saturate(half(vTex2.w)), half(1.0 - uFog.w));
+    result.rgb = lerp(half3(uFog.rgb), result.rgb, f);
+    return result;
+}

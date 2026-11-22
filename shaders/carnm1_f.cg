@@ -1,0 +1,25 @@
+// Normal-mapped car (CARNORMALMAP car_normalmap, shader 1, ps_1_1). Register: cvVinylScales c0 (clamped). Sampler:
+// diffuse s1. The vinyl tint times the texel over half the diffuse colour by the texel's alpha; then the fog:
+// vTex2 = (fog colour * (1 - factor), factor).
+
+float4 main(
+    half4 vColor : COLOR0,
+    half4 vColor1 : COLOR1,
+    float2 vTex1 : TEXCOORD1,
+    half4 vTex2 : TEXCOORD2_HALF,
+    uniform sampler2D uTex0,
+    uniform sampler2D uTex1,
+    uniform float4 uC[1],
+    uniform float4 uAlphaTest) : COLOR
+{
+    half4 tex = tex2D<half4>(uTex1, vTex1);
+    half scale = half(uC[0].x);
+    half3 vinyl = (1.0 - scale) * vColor1.a + scale * vColor.rgb;
+    half4 c = half4(saturate(lerp(vColor.rgb * 0.5, vinyl * tex.rgb, tex.a)), tex.a * vColor.a);
+#ifdef ATEST
+    if (half(uAlphaTest.x) * c.a < half(uAlphaTest.y))
+        discard;
+#endif
+    c.rgb = c.rgb * vTex2.a + vTex2.rgb;
+    return c;
+}

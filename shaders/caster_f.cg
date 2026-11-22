@@ -1,0 +1,31 @@
+// Shadow casters and depth passes: GREEN (SHADOW_MAP_MESH, ps_1_1) writes (0, 1, 0, 1), OPAQUE (WATERSHADER water
+// at shader 1) (0, 0, 0, 1), otherwise (CAR_SHADOW_MAP) (0, 0, 0, 0), DEPTH (SHADOW_MAP_MESH_DEPTH, WORLDDEPTH skinned, ps_2_0) the depth z / w in rgb with alpha 1;
+// DEPTH with TEXTURE (WORLDDEPTH world) the texel's alpha.
+
+float4 main(
+#ifdef TEXTURE
+    float2 vTex0 : TEXCOORD0,
+    uniform sampler2D uTex0,
+#endif
+#ifdef DEPTH
+    float2 vTex1 : TEXCOORD1,
+#endif
+    uniform float4 uAlphaTest) : COLOR
+{
+#if defined(TEXTURE)
+    float4 c = float4(float3(vTex1.x / vTex1.y), tex2D(uTex0, vTex0).a);
+#elif defined(DEPTH)
+    float4 c = float4(float3(vTex1.x / vTex1.y), 1.0);
+#elif defined(GREEN)
+    half4 c = half4(0.0, 1.0, 0.0, 1.0);
+#elif defined(OPAQUE)
+    half4 c = half4(0.0, 0.0, 0.0, 1.0);
+#else
+    half4 c = half4(0.0);
+#endif
+#ifdef ATEST
+    if (uAlphaTest.x * c.a < uAlphaTest.y)
+        discard;
+#endif
+    return c;
+}

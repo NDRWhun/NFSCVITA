@@ -1,0 +1,15 @@
+// Light streaks (PARTICLES streak_flares, ps_2_0): the texel (mip bias -5) times the vertex colour.
+
+float4 main(
+    half4 vColor : COLOR0,
+    float2 vTex0 : TEXCOORD0,
+    uniform sampler2D uTex0,
+    uniform float4 uAlphaTest) : COLOR
+{
+    half4 c = tex2Dbias<half4>(uTex0, float4(vTex0, 0.0, -5.0)) * vColor;
+#ifdef ATEST
+    if (half(uAlphaTest.x) * c.a < half(uAlphaTest.y))
+        discard;
+#endif
+    return c;
+}

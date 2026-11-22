@@ -1,0 +1,45 @@
+// Car glass (GLASSREFLECTSHADER glassreflect, shader 1, vs_1_1). Registers: WorldViewProj c0-c3, cvFogValue c4,
+// cfFogEnable c5, cvVertexPowerBrightness c6, cvLocalEyePos c7. Outputs: the vertex colour raised to c6.x and scaled
+// by c6.y, the fog (uFog: colour, enable) as COLOR1 = (fog colour * (1 - factor), factor), the texture coordinate
+// and the eye direction reflected about the normal, as (x, -z, y).
+
+// The lit instruction's z: x > 0 and y > 0 ? y^w (w clamped to +-127.9961) : 0.
+float litZ(float x, float y, float w)
+{
+#ifdef LIT_BRANCH
+    return x > 0.0 && y > 0.0 ? pow(y, clamp(w, -127.9961, 127.9961)) : 0.0;
+#else
+    // The power computed for every vertex and selected: no branch, so the program runs in parallel mode.
+    float p = exp2(clamp(w, -127.9961, 127.9961) * log2(abs(y)));
+    return x > 0.0 && y > 0.0 ? p : 0.0;
+#endif
+}
+
+void main(
+    float4 aPosition,
+    float2 aTex0,
+    float4 aColor,
+    float3 aNormal,
+    uniform float4 uC[8],
+    uniform float4 uFog,
+    float4 out vPosition : POSITION,
+    float4 out vColor : COLOR0,
+    float4 out vColor1 : COLOR1,
+    float2 out vTex0 : TEXCOORD0,
+    half3 out vTex1 : TEXCOORD1_HALF)
+{
+    float4 color = aColor.zyxw;
+    float z = dot(aPosition, uC[2]);
+    vPosition = float4(dot(aPosition, uC[0]), dot(aPosition, uC[1]), z, dot(aPosition, uC[3]));
+    float power = uC[6].x;
+    float3 raised = float3(litZ(color.x, color.x, power), litZ(color.y, color.y, power),
+                           litZ(color.z, color.z, power));
+    vColor = saturate(float4(raised * uC[6].y, color.w));
+    float g = 1.0 - saturate((uC[4].x - z) * uC[4].y);
+    float haze = saturate((litZ(g, g, uC[4].w) * uC[4].z) * uC[5].x) * uFog.w;
+    vColor1 = float4(uFog.rgb * haze, 1.0 - haze);
+    float3 e = normalize(uC[7].xyz - aPosition.xyz);
+    float3 r = e - aNormal * (2.0 * dot(e, aNormal));
+    vTex0 = aTex0;
+    vTex1 = half3(r.x, -r.z, r.y);
+}

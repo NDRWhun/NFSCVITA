@@ -1,0 +1,39 @@
+// Screen filter (ps_1_1). Default (pass 0): the texel with its luminance as alpha, blended toward that luminance by
+// TintColor.w (c0). GAIN (pass 1): the texel's alpha and red, then green and blue, look up the gain map; the second
+// lookup with the first one's alpha is blended over the texel by 1 - that alpha. Stage 0 coordinates are projected as
+// the stage's texture transform flags say (uProj).
+
+float4 main(
+    float4 vTex0 : TEXCOORD0,
+    uniform sampler2D uTex0,
+#ifdef GAIN
+    uniform sampler2D uTex1,
+    uniform sampler2D uTex2,
+#else
+    uniform float4 uC[1],
+#endif
+    uniform float4 uProj,
+    uniform float4 uAlphaTest) : COLOR
+{
+    half4 t0 = tex2Dproj<half4>(uTex0, float3(vTex0.xy, dot(float3(vTex0.zw, 1.0), uProj.xyz)));
+#ifdef GAIN
+    half4 t1 = tex2D<half4>(uTex1, float2(t0.a, t0.r));
+    half4 t2 = tex2D<half4>(uTex2, float2(t0.g, t0.b));
+    t2.a = t1.a;
+    half k = saturate(-t1.a + 1.0);
+    half4 c = k * (t2 - t0) + t0;
+#else
+    half4 tint = half4(uC[0]);
+    half w = tint.a * -1.0;
+    w = w + 1.0;
+    half lum = dot(t0.rgb, half3(0.300000012, 0.589999974, 0.109999999));
+    t0.a = lum;
+    half l = t0.a * tint.a;
+    half4 c = t0 * w + l;
+#endif
+#ifdef ATEST
+    if (uAlphaTest.x * saturate(c.a) < uAlphaTest.y)
+        discard;
+#endif
+    return c;
+}

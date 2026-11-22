@@ -1,0 +1,20 @@
+// Visual treatment at shader 1 (visualtreatment, ps_1_1). Registers (clamped): cvVisualTreatmentParams c0,
+// cfBloomScale c1. The scene (sampler 0) plus the bloom (sampler 1) times c1.x, times c0.x; alpha the scene's. Both
+// coordinates of the pass are the same.
+
+float4 main(
+    float2 vTex0 : TEXCOORD0,
+    uniform sampler2D uTex0,
+    uniform sampler2D uTex1,
+    uniform float4 uC[2],
+    uniform float4 uAlphaTest) : COLOR
+{
+    half4 c = tex2D<half4>(uTex0, vTex0);
+    half3 bloom = tex2D<half4>(uTex1, vTex0).rgb;
+    c.rgb = saturate(bloom * half(uC[1].x) + c.rgb) * half(uC[0].x);
+#ifdef ATEST
+    if (half(uAlphaTest.x) * c.a < half(uAlphaTest.y))
+        discard;
+#endif
+    return c;
+}

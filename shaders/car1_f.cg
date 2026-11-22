@@ -1,0 +1,30 @@
+// Car (shader 1, ps_1_1). Register: cvVinylScales c0 (clamped). Samplers: envmap s0 (cube, vTex0), diffuse s1. The
+// vinyl tint over the paint by the texel's alpha, plus the envmap times the envmap colour; then the fixed-function
+// vertex fog (factor in vTex3.w; uFog: colour, enable).
+
+float4 main(
+    half4 vColor : COLOR0,
+    half4 vColor1 : COLOR1,
+    float4 vTex0 : TEXCOORD0,
+    float4 vTex1 : TEXCOORD1,
+    float4 vTex3 : TEXCOORD3,
+    uniform samplerCUBE uTex0,
+    uniform sampler2D uTex1,
+    uniform float4 uC[1],
+    uniform float4 uFog,
+    uniform float4 uAlphaTest) : COLOR
+{
+    half4 env = texCUBE<half4>(uTex0, vTex0.xyz);
+    half4 tex = tex2D<half4>(uTex1, vTex1.xy);
+    half scale = half(uC[0].x);
+    half3 vinyl = (1.0 - scale) * vColor1.a + scale * vColor.rgb;
+    half4 c = half4(lerp(vColor.rgb, vinyl * tex.rgb, tex.a), tex.a * vColor.a);
+    c.rgb = saturate(env.rgb * vColor1.rgb + c.rgb);
+#ifdef ATEST
+    if (half(uAlphaTest.x) * c.a < half(uAlphaTest.y))
+        discard;
+#endif
+    half f = max(saturate(half(vTex3.w)), half(1.0 - uFog.w));
+    c.rgb = lerp(half3(uFog.rgb), c.rgb, f);
+    return c;
+}

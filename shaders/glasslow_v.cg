@@ -1,0 +1,32 @@
+// Car glass at low detail (lowlod, vs_1_1). Registers: WorldViewProj c0-c3, cvVertexPowerBrightness c4. The vertex
+// colour raised to the power c4.x (as lit computes it) and scaled by c4.y; alpha as given.
+
+// The lit instruction's z: x > 0 and y > 0 ? y^w (w clamped to +-127.9961) : 0.
+float litZ(float x, float y, float w)
+{
+#ifdef LIT_BRANCH
+    return x > 0.0 && y > 0.0 ? pow(y, clamp(w, -127.9961, 127.9961)) : 0.0;
+#else
+    // The power computed for every vertex and selected: no branch, so the program runs in parallel mode.
+    float p = exp2(clamp(w, -127.9961, 127.9961) * log2(abs(y)));
+    return x > 0.0 && y > 0.0 ? p : 0.0;
+#endif
+}
+
+void main(
+    float4 aPosition,
+    float4 aColor,
+    float2 aTex0,
+    uniform float4 uC[5],
+    float4 out vPosition : POSITION,
+    float4 out vColor : COLOR0,
+    float2 out vTex0 : TEXCOORD0)
+{
+    float4 color = aColor.zyxw;
+    vPosition = float4(dot(aPosition, uC[0]), dot(aPosition, uC[1]), dot(aPosition, uC[2]), dot(aPosition, uC[3]));
+    float power = uC[4].x;
+    float3 raised = float3(litZ(color.x, color.x, power), litZ(color.y, color.y, power),
+                           litZ(color.z, color.z, power));
+    vColor = saturate(float4(raised * uC[4].y, color.w));
+    vTex0 = aTex0;
+}

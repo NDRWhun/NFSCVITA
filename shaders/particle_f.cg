@@ -1,0 +1,30 @@
+// Particles (PARTICLES fuzzz and no_fuzzz, ps_2_0). Registers: magnitude_debug c0, ambient_colour c1. Samplers:
+// diffuse s0, normal map s1. The normal-map normal scaled by c0.x lights the texel times the vertex colour: ambient
+// plus 0.4 * (n . h)^10 plus the light's colour (vColor1) times n . l, with the directions interpolated from the
+// vertex program's unit vectors.
+
+float4 main(
+    half4 vColor : COLOR0,
+    half4 vColor1 : COLOR1,
+    float2 vTex0 : TEXCOORD0,
+    half3 vTex1 : TEXCOORD1_HALF,
+    half3 vTex2 : TEXCOORD2_HALF,
+    uniform sampler2D uTex0,
+    uniform sampler2D uTex1,
+    uniform float4 uC[2],
+    uniform float4 uAlphaTest) : COLOR
+{
+    half3 n = (tex2D<half4>(uTex1, vTex0).xyz * 2.0 - 1.0) * half(uC[0].x);
+    half4 tex = tex2D<half4>(uTex0, vTex0) * vColor;
+    half h = saturate(dot(n, vTex2));
+    h = h * h;
+    half h4 = h * h;
+    half3 light = (h4 * h4 * h) * 0.400000006 + half3(uC[1].rgb);
+    light = saturate(dot(n, vTex1)) * vColor1.rgb + light;
+    half4 result = half4(light * tex.rgb, tex.a);
+#ifdef ATEST
+    if (half(uAlphaTest.x) * result.a < half(uAlphaTest.y))
+        discard;
+#endif
+    return result;
+}

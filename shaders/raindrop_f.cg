@@ -1,0 +1,20 @@
+// Rain drops on the screen (RAIN_DROP filter, ps_2_0). Registers: RAINDROPOFFSET c0, RAINDROPALPHA c1. Samplers:
+// scene s0, displacement s1. The displacement's green and blue, scaled by c0.zw and offset by c0.xy, read the scene
+// (times 1.2); alpha is the displacement's alpha times c1.x.
+
+float4 main(
+    float2 vTex0 : TEXCOORD0,
+    uniform sampler2D uTex0,
+    uniform sampler2D uTex1,
+    uniform float4 uC[2],
+    uniform float4 uAlphaTest) : COLOR
+{
+    half4 d = tex2D<half4>(uTex1, vTex0);
+    float2 uv = float2(d.yz) * uC[0].zw + uC[0].xy;
+    half4 c = half4(tex2D<half4>(uTex0, uv).rgb * 1.20000005, d.w * half(uC[1].x));
+#ifdef ATEST
+    if (half(uAlphaTest.x) * c.a < half(uAlphaTest.y))
+        discard;
+#endif
+    return c;
+}

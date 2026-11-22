@@ -1,0 +1,23 @@
+// Flares (PARTICLES flares, ps_2_0). Registers: cvBaseAlphaRef c0. Samplers: diffuse s0, scene depth s1 (red,
+// read at the screen coordinate). The texel (mip bias -5) times the vertex colour, its alpha times
+// saturate(saturate((0.4 w - (depth - scene depth)) / w) + c0.x).
+
+float4 main(
+    half4 vColor : COLOR0,
+    float2 vTex0 : TEXCOORD0,
+    float4 vTex1 : TEXCOORD1,
+    uniform sampler2D uTex0,
+    uniform sampler2D uTex1,
+    uniform float4 uC[1],
+    uniform float4 uAlphaTest) : COLOR
+{
+    float scene = tex2D(uTex1, vTex1.xy).x;
+    half4 c = tex2Dbias<half4>(uTex0, float4(vTex0, 0.0, -5.0)) * vColor;
+    float soft = saturate((vTex1.w * 0.400000006 - (vTex1.z - scene)) / vTex1.w);
+    c.a = c.a * half(saturate(soft + uC[0].x));
+#ifdef ATEST
+    if (half(uAlphaTest.x) * c.a < half(uAlphaTest.y))
+        discard;
+#endif
+    return c;
+}

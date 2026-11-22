@@ -1,0 +1,60 @@
+// Characters (UCAP main, shader 2, vs_2_0). Registers: camBlendMatrices c0-c63, cavPcaWeightsX/Y/Z c64-c87,
+// cavPcaWeightsNX/NY/NZ c88-c111, WorldViewProj c112-c115, cvLocalEyePos c116, cvDiffuseMin c117, cvDiffuseRange
+// c118, cvClampAndScales c119. Position and normal are rebuilt from the eight PCA coordinate sets, skinned by three
+// bones (blended in the order y, x, z), then the reflection of the eye direction and the diffuse colour.
+
+// Sum of the eight PCA dot products of an axis, in order (registers first..first+7).
+float pca(float4 uC[120], int first, float4 t[8])
+{
+    float s = dot(uC[first], t[0]);
+    for (int k = 1; k < 8; ++k)
+        s = s + dot(uC[first + k], t[k]);
+    return s;
+}
+
+void main(
+    float4 aPosition,
+    float2 aTex0,
+    float4 aWeight,
+    float4 aIndex,
+    float4 aTex1,
+    float4 aTex2,
+    float4 aTex3,
+    float4 aTex4,
+    float4 aTex5,
+    float4 aTex6,
+    float4 aTex7,
+    float4 aTex8,
+    uniform float4 uC[120],
+    float4 out vPosition : POSITION,
+    float2 out vTex0 : TEXCOORD0,
+    float3 out vTex1 : TEXCOORD1,
+    float4 out vTex2 : TEXCOORD2,
+    float3 out vTex3 : TEXCOORD3)
+{
+    float4 t[8] = { aTex1, aTex2, aTex3, aTex4, aTex5, aTex6, aTex7, aTex8 };
+    float4 p = float4(pca(uC, 64, t), pca(uC, 72, t), pca(uC, 80, t), 1.0);
+    int3 bone = int3((aIndex.xyz - frac(aIndex.xyz)) * 4.0);
+    float4 m[4];
+    for (int i = 0; i < 4; ++i)
+    {
+        float4 b = aWeight.y * uC[i + bone.y];
+        b = uC[i + bone.x] * aWeight.x + b;
+        m[i] = uC[i + bone.z] * aWeight.z + b;
+    }
+    float4 skinned = float4(dot(p, m[0]), dot(p, m[1]), dot(p, m[2]), dot(p, m[3]));
+    vPosition = float4(dot(skinned, uC[112]), dot(skinned, uC[113]), dot(skinned, uC[114]), dot(skinned, uC[115]));
+
+    float3 pn = float3(pca(uC, 88, t), pca(uC, 96, t), pca(uC, 104, t));
+    float4 nn = float4(normalize(pn), 0.0);
+    float3 n = float3(dot(nn, m[0]), dot(nn, m[1]), dot(nn, m[2]));
+    float3 e = normalize(-aPosition.xyz + uC[116].xyz);
+    float en = dot(e, n);
+    float facing = min(max(en, 0.0), 1.0);
+    float3 r = n * -(en + en) + e;
+    facing = min(facing, uC[119].x);
+    vTex3 = n;
+    vTex1 = -r;
+    vTex2 = (facing * uC[119].z) * uC[118] + uC[117];
+    vTex0 = aTex0;
+}

@@ -1,0 +1,53 @@
+// Filter (ps_1_1): TAPS texels weighted by FilterWeights (c0-c3), summed from tap 1; LUM: alpha is the dot product of
+// the colour with LUMINANCE_VECTOR (c4); PREMUL: colour times alpha.
+
+float4 main(
+    float2 vTex0 : TEXCOORD0,
+#if TAPS > 1
+    float2 vTex1 : TEXCOORD1,
+    uniform sampler2D uTex1,
+#endif
+#if TAPS > 2
+    float2 vTex2 : TEXCOORD2,
+    uniform sampler2D uTex2,
+#endif
+#if TAPS > 3
+    float2 vTex3 : TEXCOORD3,
+    uniform sampler2D uTex3,
+#endif
+    uniform sampler2D uTex0,
+#ifdef LUM
+    uniform float4 uC[5],
+#else
+    uniform float4 uC[TAPS],
+#endif
+    uniform float4 uAlphaTest) : COLOR
+{
+    half4 t0 = tex2D<half4>(uTex0, vTex0);
+#if TAPS == 1
+    half4 c = t0 * half4(uC[0]);
+#else
+    half4 t1 = tex2D<half4>(uTex1, vTex1);
+    half4 c = t1 * half4(uC[1]);
+    c = t0 * half4(uC[0]) + c;
+#endif
+#if TAPS > 2
+    half4 t2 = tex2D<half4>(uTex2, vTex2);
+    c = t2 * half4(uC[2]) + c;
+#endif
+#if TAPS > 3
+    half4 t3 = tex2D<half4>(uTex3, vTex3);
+    c = t3 * half4(uC[3]) + c;
+#endif
+#ifdef LUM
+    c.a = dot(half3(uC[4].xyz), c.rgb);
+#endif
+#ifdef PREMUL
+    c.rgb = c.a * c.rgb;
+#endif
+#ifdef ATEST
+    if (uAlphaTest.x * saturate(c.a) < uAlphaTest.y)
+        discard;
+#endif
+    return c;
+}

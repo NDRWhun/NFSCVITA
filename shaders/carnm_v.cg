@@ -1,0 +1,75 @@
+// Car with normal map (shader 2, vs_2_0). Registers as the car's: cavHarmonicCoeff c0-c9, WorldViewProj c10-c13,
+// cmWorldView c14-c16, cvFogValue c17, cfFogEnable c18, cvLocalEyePos c19, cfEnvmapPullAmount c20, cvDiffuseMin c21,
+// cvDiffuseRange c22, cvEnvmapMin c23, cvEnvmapRange c24, cvPowers c25, cvClampAndScales c26, cvFlakes c27. Outputs:
+// the view-space reflection, the texture coordinate and mip bias, the eye direction and flake factor, the normal with
+// the vertex fog factor, the tangent, the harmonic diffuse colour (not clamped before use) and the envmap colour.
+
+// The lit instruction's z: x > 0 and y > 0 ? y^w (w clamped to +-127.9961) : 0.
+float litZ(float x, float y, float w)
+{
+#ifdef LIT_BRANCH
+    return x > 0.0 && y > 0.0 ? pow(y, clamp(w, -127.9961, 127.9961)) : 0.0;
+#else
+    // The power computed for every vertex and selected: no branch, so the program runs in parallel mode.
+    float p = exp2(clamp(w, -127.9961, 127.9961) * log2(abs(y)));
+    return x > 0.0 && y > 0.0 ? p : 0.0;
+#endif
+}
+
+void main(
+    float4 aPosition,
+    float4 aNormal,
+    float4 aTex0,
+    float4 aTangent,
+    uniform float4 uC[28],
+    float4 out vPosition : POSITION,
+    float4 out vColor : COLOR0,
+    float4 out vColor1 : COLOR1,
+    float3 out vTex0 : TEXCOORD0,
+    float4 out vTex1 : TEXCOORD1,
+    float4 out vTex2 : TEXCOORD2,
+    float4 out vTex3 : TEXCOORD3,
+    float4 out vTex5 : TEXCOORD5)
+{
+    float3 n = aNormal.xyz;
+    float z = dot(aPosition, uC[12]);
+    vPosition = float4(dot(aPosition, uC[10]), dot(aPosition, uC[11]), z, dot(aPosition, uC[13]));
+
+    float f = min(max((-z + uC[17].x) * uC[17].y, 0.0), 1.0);
+    float g = -f + 1.0;
+    float fog = (litZ(g, g, uC[17].w) * uC[17].z) * -uC[18].x + 1.0;
+
+    float3 e = normalize(-aPosition.xyz + uC[19].xyz);
+    float span = 1.0 / rsqrt(dot(e, e));
+    float fade = min(max(span * -0.25 + 1.20000005, 0.0), 1.0);
+    float ne = dot(-e, n);
+    vTex1 = float4(aTex0.xyz, ne * 0.100000001 + -1.20000005);
+    vTex2 = float4(e, (fade * uC[27].y) * 0.0399999991);
+
+    float3 r = n * -(ne + ne) + -e;
+    float3 pulled = normalize(float3(r.x, r.y, uC[20].x * -r.z + r.z));
+    vTex0 = float3(dot(pulled, uC[14].xyz), dot(pulled, uC[15].xyz), dot(pulled, uC[16].xyz));
+
+    float4 sq = n.xyzy * n.xyzx;
+    float3 h = uC[1].xyz * sq.x + uC[0].xyz;
+    h = uC[2].xyz * sq.y + h;
+    h = uC[3].xyz * sq.z + h;
+    h = uC[4].xyz * sq.w + h;
+    float2 mixed = n.xz * n.zy;
+    h = uC[5].xyz * mixed.x + h;
+    h = uC[6].xyz * mixed.y + h;
+    h = uC[7].xyz * n.x + h;
+    h = uC[8].xyz * n.y + h;
+    h = uC[9].xyz * n.z + h;
+
+    float s = min(max(dot(e, n), 0.0), 1.0);
+    float diffusePower = min(litZ(s, s, uC[25].x), uC[26].x) * uC[26].z;
+    float4 diffuse = diffusePower * uC[22] + uC[21];
+    float flake = diffusePower * uC[27].w + uC[27].z;
+    vColor = saturate(float4(h * diffuse.xyz, diffuse.w));
+    float lum = dot(float3(0.212500006, 0.715399981, 0.0720999986), h);
+    float envPower = min(litZ(s, s, uC[25].z), uC[26].y) * uC[26].w;
+    vColor1 = saturate(float4(envPower * uC[24].xyz + uC[23].xyz, flake * lum));
+    vTex3 = float4(n, fog);
+    vTex5 = aTangent;
+}

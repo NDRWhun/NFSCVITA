@@ -1,0 +1,44 @@
+// Road at shader 1 (WORLDREFLECT dryroad and raining_on_road, vs_1_1). Registers: WorldViewProj c0-c3,
+// cmHeadlight1WVP c4-c7, cvFogValue c8, cfFogEnable c9. Outputs: twice the vertex colour raised to 1.3 with alpha
+// 3 a^2, the fog (uFog: colour, enable) as COLOR1 = (fog colour * (1 - factor), factor), the texture coordinate,
+// the headlight's projective coordinate and the clip map coordinate (headlight w * 0.005 + 0.5, 0).
+
+// The lit instruction's z: x > 0 and y > 0 ? y^w (w clamped to +-127.9961) : 0.
+float litZ(float x, float y, float w)
+{
+#ifdef LIT_BRANCH
+    return x > 0.0 && y > 0.0 ? pow(y, clamp(w, -127.9961, 127.9961)) : 0.0;
+#else
+    // The power computed for every vertex and selected: no branch, so the program runs in parallel mode.
+    float p = exp2(clamp(w, -127.9961, 127.9961) * log2(abs(y)));
+    return x > 0.0 && y > 0.0 ? p : 0.0;
+#endif
+}
+
+void main(
+    float4 aPosition,
+    float4 aColor,
+    float2 aTex0,
+    uniform float4 uC[10],
+    uniform float4 uFog,
+    float4 out vPosition : POSITION,
+    float4 out vColor : COLOR0,
+    float4 out vColor1 : COLOR1,
+    float2 out vTex0 : TEXCOORD0,
+    float3 out vTex1 : TEXCOORD1,
+    float2 out vTex2 : TEXCOORD2)
+{
+    float4 color = aColor.zyxw;
+    float z = dot(aPosition, uC[2]);
+    vPosition = float4(dot(aPosition, uC[0]), dot(aPosition, uC[1]), z, dot(aPosition, uC[3]));
+    float3 raised = float3(litZ(color.x, color.x, 1.29999995), litZ(color.y, color.y, 1.29999995),
+                           litZ(color.z, color.z, 1.29999995));
+    vColor = saturate(float4(raised * 2.0, color.w * color.w * 3.0));
+    float g = 1.0 - saturate((uC[8].x - z) * uC[8].y);
+    float haze = saturate((litZ(g, g, uC[8].w) * uC[8].z) * uC[9].x) * uFog.w;
+    vColor1 = float4(uFog.rgb * haze, 1.0 - haze);
+    float w = dot(aPosition, uC[7]);
+    vTex0 = aTex0;
+    vTex1 = float3(dot(aPosition, uC[4]), dot(aPosition, uC[5]), w);
+    vTex2 = float2(w * 0.00499999989 + 0.5, 0.0);
+}

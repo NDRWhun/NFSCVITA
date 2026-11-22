@@ -1,0 +1,67 @@
+// Normal-mapped world (shader 2, vs_2_0). Registers: WorldViewProj c0-c3, cmWorldMat c4-c6, cvFogValue c7,
+// cfFogEnable c8, cvVertexPowerBrightness c9, cfMipMapBias c10 (its pixel shader takes no bias); pixel registers: cmWorldMatTranspose p0-p2, cfFogEnable p3,
+// cavWorldHeadlightDirection p4, cavWorldHeadlightUpDirection p5, cavWorldHeadlightPosition p6. Outputs: the vertex
+// colour raised to c9.x and scaled by c9.y with the headlight scale (alpha * p3.x), the fog (uFog: colour, enable),
+// the texture coordinate, the vector to the headlight, its dot products with the world tangent, bitangent and
+// normal (the pixel's normal-map normal weighs them) with the facing gain of upward normals, the world z of those
+// three with the sky-light weight of the object normal, and the dot products with the headlight direction and up
+// direction.
+
+// The lit instruction's z: x > 0 and y > 0 ? y^w (w clamped to +-127.9961) : 0.
+float litZ(float x, float y, float w)
+{
+#ifdef LIT_BRANCH
+    return x > 0.0 && y > 0.0 ? pow(y, clamp(w, -127.9961, 127.9961)) : 0.0;
+#else
+    // The power computed for every vertex and selected: no branch, so the program runs in parallel mode.
+    float p = exp2(clamp(w, -127.9961, 127.9961) * log2(abs(y)));
+    return x > 0.0 && y > 0.0 ? p : 0.0;
+#endif
+}
+
+void main(
+    float4 aPosition,
+    float3 aNormal,
+    float4 aColor,
+    float2 aTex0,
+    float4 aTangent,
+    uniform float4 uC[11],
+    uniform float4 uP[7],
+    uniform float4 uFog,
+    float4 out vPosition : POSITION,
+    float4 out vColor : COLOR0,
+    float4 out vColor1 : COLOR1,
+    float2 out vTex0 : TEXCOORD0,
+    float3 out vTex1 : TEXCOORD1,
+    half4 out vTex2 : TEXCOORD2_HALF,
+    half4 out vTex3 : TEXCOORD3_HALF,
+    half2 out vTex4 : TEXCOORD4_HALF)
+{
+    float4 color = aColor.zyxw;
+    float z = dot(aPosition, uC[2]);
+    vPosition = float4(dot(aPosition, uC[0]), dot(aPosition, uC[1]), z, dot(aPosition, uC[3]));
+    float power = uC[9].x;
+    float3 raised = float3(litZ(color.x, color.x, power), litZ(color.y, color.y, power),
+                           litZ(color.z, color.z, power));
+    vColor = saturate(float4(raised * uC[9].y, color.w * uP[3].x));
+
+    // Fog: 1 - cfFogEnable * fog.z * (1 - saturate((fog.x - z) * fog.y))^fog.w.
+    float g = 1.0 - saturate((uC[7].x - z) * uC[7].y);
+    float haze = saturate((litZ(g, g, uC[7].w) * uC[7].z) * uC[8].x) * uFog.w;
+    vColor1 = float4(uFog.rgb * haze, 1.0 - haze);
+    vTex0 = aTex0;
+
+    // World tangent frame (cmWorldMatTranspose rows weighted by the object vector).
+    float3 bitangent = cross(aNormal, aTangent.xyz) * aTangent.w;
+    float3 t = uP[0].xyz * aTangent.x + uP[1].xyz * aTangent.y + uP[2].xyz * aTangent.z;
+    float3 b = uP[0].xyz * bitangent.x + uP[1].xyz * bitangent.y + uP[2].xyz * bitangent.z;
+    float3 n = uP[0].xyz * aNormal.x + uP[1].xyz * aNormal.y + uP[2].xyz * aNormal.z;
+    float3 world = float3(dot(uC[4], aPosition), dot(uC[5], aPosition), dot(uC[6], aPosition));
+    float3 l = uP[6].xyz - world;
+    vTex1 = l;
+    float up = pow(saturate(aNormal.z), 14.0) * 2.0 + 1.0;
+    float side = 1.0 - abs(aNormal.z);
+    vTex2 = half4(dot(l, t), dot(l, b), dot(l, n), up);
+    vTex3 = half4(t.z, b.z, n.z, side * side);
+    vTex4 = half2(dot(l, -uP[4].xyz), dot(l, uP[5].xyz));
+}

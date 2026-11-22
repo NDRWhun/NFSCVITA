@@ -1,0 +1,55 @@
+// Car glass (shader 2, vs_2_0). Registers: WorldViewProj c0-c3, cmWorldMat c4-c7, cvFogValue c8, cfFogEnable c9,
+// cvVertexPowerBrightness c10, cvLocalEyePos c11. Outputs: the texture coordinate, the reflection vector built from
+// the world matrix columns, the normal, the world position, the vertex colour raised to the power and scaled, and the
+// vertex fog factor (with the normal).
+
+// The lit instruction's z: x > 0 and y > 0 ? y^w (w clamped to +-127.9961) : 0.
+float litZ(float x, float y, float w)
+{
+#ifdef LIT_BRANCH
+    return x > 0.0 && y > 0.0 ? pow(y, clamp(w, -127.9961, 127.9961)) : 0.0;
+#else
+    // The power computed for every vertex and selected: no branch, so the program runs in parallel mode.
+    float p = exp2(clamp(w, -127.9961, 127.9961) * log2(abs(y)));
+    return x > 0.0 && y > 0.0 ? p : 0.0;
+#endif
+}
+
+void main(
+    float4 aPosition,
+    float4 aNormal,
+    float4 aColor,
+    float4 aTex0,
+    uniform float4 uC[12],
+    float4 out vPosition : POSITION,
+    float4 out vColor : COLOR0,
+    float2 out vTex0 : TEXCOORD0,
+    float3 out vTex1 : TEXCOORD1,
+    float4 out vTex2 : TEXCOORD2,
+    float3 out vTex3 : TEXCOORD3)
+{
+    float4 color = aColor.zyxw;
+    float z = dot(aPosition, uC[2]);
+    vPosition = float4(dot(aPosition, uC[0]), dot(aPosition, uC[1]), z, dot(aPosition, uC[3]));
+
+    float3 a = normalize(float3(uC[4].x, uC[6].x, uC[5].x));
+    float3 b = float3(uC[4].y, uC[6].y, uC[5].y);
+    float3 n = rsqrt(dot(aNormal, aNormal)) * aNormal.xyz;
+    float3 e = normalize(-aPosition.xyz + uC[11].xyz);
+    float ne2 = dot(n, e) + dot(n, e);
+    b = rsqrt(dot(b, b)) * b;
+    float3 r = e * -ne2 + n;
+    float3 c = a.zxy * b.yzx - a.yzx * b.zxy;
+    vTex1 = c * r.z + (a * r.x + b * r.y);
+    vTex3 = float3(dot(uC[4], aPosition), dot(uC[5], aPosition), dot(uC[6], aPosition));
+
+    float f = min(max((-z + uC[8].x) * uC[8].y, 0.0), 1.0);
+    float g = -f + 1.0;
+    float fog = (litZ(g, g, uC[8].w) * uC[8].z) * -uC[9].x + 1.0;
+    float power = uC[10].x;
+    float3 raised = float3(litZ(color.x, color.x, power), litZ(color.y, color.y, power),
+                           litZ(color.z, color.z, power));
+    vColor = saturate(float4(raised * uC[10].y, color.w));
+    vTex0 = aTex0.xy;
+    vTex2 = float4(aNormal.xyz, fog);
+}

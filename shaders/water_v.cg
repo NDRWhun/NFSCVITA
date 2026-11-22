@@ -1,0 +1,30 @@
+// Water (WATERSHADER water, shader 2, vs_1_1). Registers: WorldViewProj c0-c3, cvTextureOffset c6, cfTimeTicker
+// c7; pixel register cvLocalEyePos p6. Outputs: the vertex colour, the scrolling PCA coordinate (position xy *
+// 0.0079 + time * (-0.5, 1.1) + offset), the reflection's projective screen coordinates with |h| / h.w (the scale of
+// the normal's shift), the eye-to-point vector, the direction to the sun and the normal. No fog (the pass turns it
+// off).
+
+void main(
+    float4 aPosition,
+    float4 aColor,
+    float3 aNormal,
+    uniform float4 uC[8],
+    uniform float4 uP[7],
+    float4 out vPosition : POSITION,
+    float4 out vColor : COLOR0,
+    float2 out vTex0 : TEXCOORD0,
+    float4 out vTex1 : TEXCOORD1,
+    float3 out vTex2 : TEXCOORD2,
+    half3 out vTex3 : TEXCOORD3_HALF,
+    half3 out vTex4 : TEXCOORD4_HALF)
+{
+    float4 h = float4(dot(aPosition, uC[0]), dot(aPosition, uC[1]), dot(aPosition, uC[2]), dot(aPosition, uC[3]));
+    vPosition = h;
+    vColor = aColor.zyxw;
+    vTex0 = aPosition.xy * 0.00789999962 + uC[7].x * float2(-0.5, 1.10000002) + uC[6].xy;
+    float4 screen = float4((h.x + h.w) * 0.5, (h.w - h.y) * 0.5, h.z, h.w);
+    vTex1 = float4(screen.xyw, length(screen) / h.w);
+    vTex2 = aPosition.xyz - uP[6].xyz;
+    vTex3 = half3(normalize(float3(-50000.0, 60000.0, 30000.0) - aPosition.xyz));
+    vTex4 = half3(aNormal);
+}

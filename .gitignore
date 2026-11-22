@@ -1,0 +1,70 @@
+# Build output
+/build*/
+*.velf
+*.self
+*.vpk
+*.elf
+*.gxp
+!/shaders/gxp/*.gxp
+param.sfo
+
+# Generated recompilation (tools/generate.ps1): derived from the game executable
+/src/nfsc/generated/
+
+# Original game binaries and data are never tracked
+/binaries/
+/vita-data/
+*.exe
+*.dll
+*.EXE
+*.DLL
+*.dat
+*.DAT
+*.bun
+*.BUN
+*.bin
+*.BIN
+*.lzc
+*.LZC
+*.abk
+*.gin
+*.vp6
+*.big
+*.mus
+*.mpf
+*.mxb
+*.csi
+*.ini
+*.INI
+
+# Logs and profiles
+*.log
+*.profraw
+*.profdata
+*.gcda
+*.gcov
+
+# Local environment
+tools/env.local.ps1
+
+# Editors / OS
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store
+__pycache__/
+
+# Agent worktrees
+.claude/
+
+# Game folder remembered by tools/build.ps1
+/build-game-dir.txt
+
+# Python packages fetched by tools/recompiler/bootstrap.py
+/.pydeps/
+
+# Discovery cache of tools/recompiler/generate.py
+/.gencache/
+
+# VitaSDK and LLVM fetched by tools/deps.py
+/.deps/

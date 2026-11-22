@@ -1,0 +1,25 @@
+#ifndef PLATFORM_LOG_H_
+#define PLATFORM_LOG_H_
+
+namespace pf
+{
+
+// A log file under the data directory, plus console output when enabled.
+void logInit(const char* logFilePath);
+void logShutdown();
+
+// Console output on or off (off by default).
+void logSetConsole(bool enabled);
+// Kernel mutex that orders the log lines (the hang watchdog reports its owner).
+int logMutexId();
+
+void logDebug(const char* fmt, ...) __attribute__((format(printf, 1, 2)));
+void logInfo(const char* fmt, ...) __attribute__((format(printf, 1, 2)));
+void logError(const char* fmt, ...) __attribute__((format(printf, 1, 2)));
+
+// Logs, flushes and terminates the process.
+[[noreturn]] void fatal(const char* fmt, ...) __attribute__((format(printf, 1, 2)));
+
+}
+
+#endif

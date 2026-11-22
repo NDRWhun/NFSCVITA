@@ -1,0 +1,34 @@
+// Canyon edge (uvesovercliff, ps_2_0): a noise value hashed from the coordinate plus cvTextureOffset (c0) modulates
+// the scene luminance raised to 1.12; the result is grey, alpha the scaled luminance. The hash runs at full
+// precision as in the bytecode, the rest at half.
+
+// 2^((s * frac(x / s) + 3) * scale) with s = 0.25 for x >= 0, else -0.25.
+float hash(float x, float scale)
+{
+    float s = x >= 0.0 ? 0.25 : -0.25;
+    return exp2((s * frac(x * (1.0 / s)) + 3.0) * scale);
+}
+
+float4 main(
+    float2 vTex0 : TEXCOORD0,
+    uniform sampler2D uTex0,
+    uniform float4 uC[1],
+    uniform float4 uAlphaTest) : COLOR
+{
+    half4 r0 = tex2D<half4>(uTex0, vTex0);
+    float2 p = vTex0 + uC[0].xy;
+    half n = half(frac(hash(p.x, 3.20367098) * hash(p.y, 2.83257604)));
+    half k = saturate(n + -0.5);
+    half lum = dot(half3(0.212500006, 0.715399981, 0.0720999986), r0.rgb);
+    half b = pow(abs(lum * 1.60000002), 1.12);
+    b = b * 1.60000002;
+    k = b * k - b;
+    half4 c;
+    c.rgb = 0.300000012 * k + b;
+    c.a = b;
+#ifdef ATEST
+    if (uAlphaTest.x * saturate(c.a) < uAlphaTest.y)
+        discard;
+#endif
+    return c;
+}

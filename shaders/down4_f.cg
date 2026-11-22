@@ -1,0 +1,38 @@
+// DownScale4x4 (ps_2_0): the mean of sixteen texels at the coordinate plus cavSampleOffsets (c0-c15), summed in
+// order; TENT: those taps on texel edges (weights 1 2 2 2 1) as nine bilinear taps at -4/3, 0, 4/3 texel (3 2 3).
+// BLOOM (DownScaleForBloom): alpha saturated, colour times colour squared times that alpha.
+
+float4 main(
+    float2 vTex0 : TEXCOORD0,
+    uniform sampler2D uTex0,
+    uniform float4 uC[16],
+    uniform float4 uAlphaTest) : COLOR
+{
+#ifdef TENT
+    float2 centre = vTex0 + (uC[0].xy + uC[15].xy) * 0.5;
+    float2 delta = (uC[15].xy - uC[0].xy) * (4.0 / 9.0);
+    half4 c = half4(0.0);
+    for (int y = 0; y < 3; ++y)
+    {
+        float v = centre.y + delta.y * (y - 1);
+        half4 side = tex2D<half4>(uTex0, float2(centre.x - delta.x, v)) + tex2D<half4>(uTex0, float2(centre.x + delta.x, v));
+        c = (side * 0.375 + tex2D<half4>(uTex0, float2(centre.x, v)) * 0.25) * (y == 1 ? 0.25 : 0.375) + c;
+    }
+#else
+    half4 c = tex2D<half4>(uTex0, vTex0 + uC[0].xy);
+    for (int i = 1; i < 16; ++i)
+        c = c + tex2D<half4>(uTex0, vTex0 + uC[i].xy);
+    c = c * 0.0625;
+#endif
+#ifdef BLOOM
+    half3 square = c.rgb * c.rgb;
+    c.a = saturate(c.a);
+    square = square * c.a;
+    c.rgb = c.rgb * square;
+#endif
+#ifdef ATEST
+    if (uAlphaTest.x * saturate(c.a) < uAlphaTest.y)
+        discard;
+#endif
+    return c;
+}

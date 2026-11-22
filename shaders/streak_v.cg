@@ -1,0 +1,37 @@
+// Light streaks (PARTICLES streak_flares, vs_1_1). Registers: cmWorldViewProj c0-c3, cmPrevWorldViewProj c4-c7,
+// cvBaseAlphaRef c8. TEXCOORD1 selects the corner: x > 0 the current position (else the previous frame's), y's sign
+// the side across the screen motion (width: the screen size of 0.1 * min(|x|, |y|)), w <= 0 drops the vertex.
+// Outputs: the colour (halved at the previous end), the texture coordinate (u fades with the motion at the previous
+// end, v from cvBaseAlphaRef z or w by the side).
+
+void main(
+    float4 aPosition,
+    float4 aColor,
+    float4 aTex0,
+    float4 aTex1,
+    uniform float4 uC[9],
+    float4 out vPosition : POSITION,
+    float4 out vColor : COLOR0,
+    float2 out vTex0 : TEXCOORD0)
+{
+    float4 color = aColor.zyxw;
+    float4 offset = float4(aPosition.xyz + 0.100000001 * min(abs(aTex1.x), abs(aTex1.y)), aPosition.w);
+    float2 o = float2(dot(offset, uC[0]), dot(offset, uC[1]));
+    float4 h = float4(dot(aPosition, uC[0]), dot(aPosition, uC[1]), dot(aPosition, uC[2]), dot(aPosition, uC[3]));
+    float4 prev = float4(dot(aPosition, uC[4]), dot(aPosition, uC[5]), dot(aPosition, uC[6]), dot(aPosition, uC[7]));
+    float3 motion = prev.xyz / prev.w - h.xyz / h.w;
+    float invMotion = rsqrt(dot(motion, motion));
+    float2 d = o - h.xy;
+    float width = 1.0 / rsqrt(dot(d, d));
+    float2 across = float2(-motion.y, motion.x) * invMotion * width;
+    float side = (aTex1.y > 0.0 ? 1.0 : 0.0) - (aTex1.y < 0.0 ? 1.0 : 0.0);
+    float current = aTex1.x > 0.0 ? 1.0 : 0.0;
+    float4 p = current * (h - prev) + prev;
+    p.xy = side * across + p.xy;
+    bool shown = aTex1.w > 0.0;
+    vPosition = shown ? p : float4(1000.0);
+    vColor = saturate(shown ? color * (current * 0.5 + 0.5) : color);
+    float fade = min((1.0 / invMotion) * 10.0, 1.0);
+    float2 t = float2((1.0 - current) * fade, aTex1.y > 0.0 ? uC[8].z : uC[8].w);
+    vTex0 = shown ? t : aTex0.xy;
+}

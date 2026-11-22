@@ -1,0 +1,16 @@
+// FE world (vs_1_1): position by WorldViewProj (c0-c3), texture coordinate plus cvTextureOffset (c4), colour times
+// (2, 2, 2, 1), clamped.
+
+void main(
+    float4 aPosition,
+    float4 aColor,
+    float4 aTex0,
+    uniform float4 uC[5],
+    float4 out vPosition : POSITION,
+    float4 out vColor : COLOR0,
+    float4 out vTex0 : TEXCOORD0)
+{
+    vPosition = float4(dot(aPosition, uC[0]), dot(aPosition, uC[1]), dot(aPosition, uC[2]), dot(aPosition, uC[3]));
+    vTex0 = aTex0 + uC[4];
+    vColor = saturate(aColor.zyxw * float4(2.0, 2.0, 2.0, 1.0));
+}

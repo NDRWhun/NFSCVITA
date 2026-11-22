@@ -1,0 +1,37 @@
+// Scene depth pass (WORLDDEPTH, vs_1_1). WORLD (world): position by WorldViewProj (c0-c3) and the texture
+// coordinate; SKINNED (skinned): camBlendMatrices c0-c63, WorldViewProj c64-c67, the position skinned by three bones
+// (blended in the order y, x, z). Both pass the clip z and w.
+
+void main(
+    float4 aPosition,
+#ifdef SKINNED
+    float3 aWeight,
+    float3 aIndex,
+    uniform float4 uC[68],
+#else
+    float2 aTex0,
+    uniform float4 uC[4],
+    float2 out vTex0 : TEXCOORD0,
+#endif
+    float2 out vTex1 : TEXCOORD1,
+    float4 out vPosition : POSITION)
+{
+#ifdef SKINNED
+    float4 p = float4(aPosition.xyz, 1.0);
+    int3 bone = int3((aIndex - frac(aIndex)) * 4.0);
+    float4 m[4];
+    for (int i = 0; i < 4; ++i)
+    {
+        float4 b = aWeight.y * uC[i + bone.y];
+        b = uC[i + bone.x] * aWeight.x + b;
+        m[i] = uC[i + bone.z] * aWeight.z + b;
+    }
+    float4 skinned = float4(dot(p, m[0]), dot(p, m[1]), dot(p, m[2]), dot(p, m[3]));
+    float4 h = float4(dot(skinned, uC[64]), dot(skinned, uC[65]), dot(skinned, uC[66]), dot(skinned, uC[67]));
+#else
+    float4 h = float4(dot(aPosition, uC[0]), dot(aPosition, uC[1]), dot(aPosition, uC[2]), dot(aPosition, uC[3]));
+    vTex0 = aTex0;
+#endif
+    vPosition = h;
+    vTex1 = h.zw;
+}

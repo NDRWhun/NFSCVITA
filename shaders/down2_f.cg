@@ -1,0 +1,39 @@
+// DownScale2x2 (ps_2_0): the mean of four texels at the coordinate plus cavSampleOffsets (c0-c3). MOTIONBLUR
+// (DownScale2x2ForMotionBlur): the four depth texels of sampler 1 give the blur factor saturate(cvBlurParams.x
+// (c4) / (1 - mean depth) + cvBlurParams.y), and the colour, first scaled by 1 + alpha, is multiplied by it.
+
+float4 main(
+    float2 vTex0 : TEXCOORD0,
+    uniform sampler2D uTex0,
+#ifdef MOTIONBLUR
+    uniform sampler2D uTex1,
+    uniform float4 uC[5],
+#else
+    uniform float4 uC[4],
+#endif
+    uniform float4 uAlphaTest) : COLOR
+{
+    float2 p0 = vTex0 + uC[0].xy;
+    float2 p1 = vTex0 + uC[1].xy;
+    float2 p2 = vTex0 + uC[2].xy;
+    float2 p3 = vTex0 + uC[3].xy;
+    half4 c = tex2D<half4>(uTex0, p0) + tex2D<half4>(uTex0, p1);
+    c = tex2D<half4>(uTex0, p2) + c;
+    c = tex2D<half4>(uTex0, p3) + c;
+    c = c * 0.25;
+#ifdef MOTIONBLUR
+    half d = tex2D<half4>(uTex1, p0).x + tex2D<half4>(uTex1, p1).x;
+    d = tex2D<half4>(uTex1, p2).x + d;
+    d = tex2D<half4>(uTex1, p3).x + d;
+    d = d * -0.25 + 1.0;
+    d = 1.0 / d;
+    c.rgb = c.a * c.rgb + c.rgb;
+    c.a = saturate(d * half(uC[4].x) + half(uC[4].y));
+    c.rgb = c.rgb * c.a;
+#endif
+#ifdef ATEST
+    if (uAlphaTest.x * saturate(c.a) < uAlphaTest.y)
+        discard;
+#endif
+    return c;
+}

@@ -1,0 +1,19 @@
+// GaussBlur5x5 (TAPS 13) and TwoPassBlur (TAPS 15), ps_2_0: texels at the coordinate plus cavSampleOffsets
+// (c0..) times cavSampleWeights (c<TAPS>..), accumulated from tap 1, then tap 0, then taps 2 and up.
+
+float4 main(
+    float2 vTex0 : TEXCOORD0,
+    uniform sampler2D uTex0,
+    uniform float4 uC[2 * TAPS],
+    uniform float4 uAlphaTest) : COLOR
+{
+    half4 c = tex2D<half4>(uTex0, vTex0 + uC[1].xy) * half4(uC[TAPS + 1]);
+    c = half4(uC[TAPS]) * tex2D<half4>(uTex0, vTex0 + uC[0].xy) + c;
+    for (int i = 2; i < TAPS; ++i)
+        c = half4(uC[TAPS + i]) * tex2D<half4>(uTex0, vTex0 + uC[i].xy) + c;
+#ifdef ATEST
+    if (uAlphaTest.x * saturate(c.a) < uAlphaTest.y)
+        discard;
+#endif
+    return c;
+}

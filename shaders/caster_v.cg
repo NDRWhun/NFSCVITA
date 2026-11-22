@@ -1,0 +1,17 @@
+// Shadow casters (SHADOW_MAP_MESH world, CAR_SHADOW_MAP car, vs_1_1): the position by WorldViewProj (c0-c3). DEPTH
+// (SHADOW_MAP_MESH_DEPTH): also the clip z and w for the pixel program.
+
+void main(
+    float4 aPosition,
+    uniform float4 uC[4],
+#ifdef DEPTH
+    float2 out vTex1 : TEXCOORD1,
+#endif
+    float4 out vPosition : POSITION)
+{
+    float4 h = float4(dot(aPosition, uC[0]), dot(aPosition, uC[1]), dot(aPosition, uC[2]), dot(aPosition, uC[3]));
+    vPosition = h;
+#ifdef DEPTH
+    vTex1 = h.zw;
+#endif
+}

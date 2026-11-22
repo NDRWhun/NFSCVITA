@@ -1,0 +1,43 @@
+// Normal-mapped world (shader 2, ps_2_0). Samplers: diffuse s0, normal map s1, headlight pattern s2. The normal-map
+// normal weighs the vertex program's tangent-frame dot products into the headlight facing term and the world z into
+// a sky light; the headlight (range, cone, edge, pattern read across its up direction) scaled by vColor.a and the
+// sky light add to the vertex colour, times the diffuse texel (alpha the texel's); then the fixed-function fog:
+// vColor1 = (fog colour * (1 - factor), factor).
+
+float4 main(
+    float4 vColor : COLOR0,
+    half4 vColor1 : COLOR1,
+    float2 vTex0 : TEXCOORD0,
+    float3 vTex1 : TEXCOORD1,
+    half4 vTex2 : TEXCOORD2_HALF,
+    half4 vTex3 : TEXCOORD3_HALF,
+    half2 vTex4 : TEXCOORD4_HALF,
+    uniform sampler2D uTex0,
+    uniform sampler2D uTex1,
+    uniform sampler2D uTex2,
+    uniform float4 uAlphaTest) : COLOR
+{
+    half4 tex = tex2D<half4>(uTex0, vTex0);
+    half3 n = tex2D<half4>(uTex1, vTex0).xyz * 2.0 - 1.0;
+    float squared = dot(vTex1, vTex1);
+    float invDistance = rsqrt(squared);
+    half inv = half(invDistance);
+    half2 cosines = vTex4 * inv;
+    half facing = min(max(dot(n, vTex2.xyz) * inv, 0.0), 2.0) * vTex2.w;
+    half2 a = max(half2(half(squared * invDistance) * -0.00425531901 + 1.0, cosines.x), 0.0);
+    a = a * a;
+    half cone = min((a.x * 3.5) * (a.y * a.y), 2.70000005);
+    half edge = 1.0 - abs(cosines.y);
+    half rim = max(edge * (edge * edge) + -0.400000006, 0.0) * 2.47000003;
+    half3 pattern = tex2D<half4>(uTex2, float2(0.0, (cosines.y + 0.850000024) * 0.588235319)).rgb;
+    half3 head = min((facing * cone * rim) * pattern, 1.39999998);
+    half sky = (saturate(dot(n, vTex3.xyz)) * 0.699999988 - 0.100000001) * vTex3.w;
+    half3 light = half(vColor.a) * head + (sky * half3(0.699999988, 0.699999988, 1.0) + half3(vColor.rgb));
+    half4 result = half4(tex.rgb * light, tex.a);
+#ifdef ATEST
+    if (half(uAlphaTest.x) * result.a < half(uAlphaTest.y))
+        discard;
+#endif
+    result.rgb = saturate(result.rgb) * vColor1.a + vColor1.rgb;
+    return result;
+}

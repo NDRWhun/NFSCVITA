@@ -1,0 +1,42 @@
+// Water (WATERSHADER water, shader 2, ps_2_0). Registers: cavPcaWeightsR c0-c1, cavPcaWeightsG c2-c3,
+// cavPcaWeightsB c4-c5. Samplers: PCA components s0 and s1, reflection s2. The eight PCA components weighted per
+// channel give the wave normal; it shifts the projective reflection and tilts the vertex normal for the Fresnel
+// term (with the distance fade min(1000 / distance, 1)) and the sun's two specular lobes (powers 770 and 90); alpha
+// 1. The wave normal and both tilted normals are normalized in half precision.
+
+float4 main(
+    half4 vColor : COLOR0,
+    float2 vTex0 : TEXCOORD0,
+    float4 vTex1 : TEXCOORD1,
+    float3 vTex2 : TEXCOORD2,
+    half3 vTex3 : TEXCOORD3_HALF,
+    half3 vTex4 : TEXCOORD4_HALF,
+    uniform sampler2D uTex0,
+    uniform sampler2D uTex1,
+    uniform sampler2D uTex2,
+    uniform float4 uC[7],
+    uniform float4 uAlphaTest) : COLOR
+{
+    float4 p0 = tex2D(uTex0, vTex0) * 2.0 - 1.0;
+    float4 p1 = tex2D(uTex1, vTex0) * 2.0 - 1.0;
+    float3 sum = float3(dot(p0, uC[0]) + dot(p1, uC[1]), dot(p0, uC[4]) + dot(p1, uC[5]),
+                        dot(p0, uC[2]) + dot(p1, uC[3]));
+    half3 wave = half3((sum + float3(127.550003, 127.540001, 251.830002)) * 0.0078125 - 1.0);
+    half4 reflection = tex2D<half4>(uTex2, vTex1.xy / vTex1.z + float2(wave.xy) * (0.0170000009 * vTex1.w));
+    half3 n1 = normalize(wave * 0.797770023 + vTex4);
+    half3 n2 = normalize(wave * 1.19777 + vTex4);
+    float squared = dot(vTex2, vTex2);
+    float invDistance = rsqrt(squared);
+    half3 view = half3(vTex2 * invDistance);
+    half fade = half(saturate(invDistance * 1000.0));
+    half fresnel = fade * (1.0 - pow(max(dot(-view, n1), 0.0), 0.699999988));
+    half3 sunReflection = vTex3 - n2 * (2.0 * dot(vTex3, n2));
+    half s = log2(saturate(dot(sunReflection, view)));
+    half specular = exp2(s * 90.0) * 0.200000003 + exp2(s * 770.0);
+    half4 result = half4(vColor.rgb * fresnel + reflection.rgb * fresnel + specular, 1.0);
+#ifdef ATEST
+    if (half(uAlphaTest.x) < half(uAlphaTest.y))
+        discard;
+#endif
+    return result;
+}

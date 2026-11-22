@@ -1,0 +1,72 @@
+// Enhanced visual treatment (visualtreatment_enchanced, ps_2_0). Registers: cvVisualEffectFadeColour c0,
+// cvVisualTreatmentParams c1, cfBloomScale c2, cvDepthOfFieldParams c3, cbDepthOfFieldEnabled c4,
+// cbDrawDepthOfField c5. Samplers: scene s0, vignette s1, bloom s2, blurred scene s3, scene depth s4, colour cube
+// s5 and the cube blended toward s6 (volumes stored as atlases, uVol and uVol2). With depth of field the blur amount
+// from the depth mixes the blurred scene in (tinted when drawn for debugging); the colour cubes (the second only when
+// c1.z is not 0), desaturation by the vignette's green, its blue, bloom, the fade colour and c1.x follow. NEAREST
+// reads the nearest slice of each colour cube instead of blending two.
+
+// A volume atlas: slices side by side; uVol = (depth, 1 / depth, 0.5 / width, 1 - 0.5 / width).
+half4 volume(sampler2D atlas, float3 c, float4 uVol)
+{
+#ifdef NEAREST
+    float s = min(floor(saturate(c.z) * uVol.x), uVol.x - 1.0);
+    return tex2D<half4>(atlas, float2((s + clamp(c.x, uVol.z, uVol.w)) * uVol.y, c.y));
+#else
+    float z = saturate(c.z) * uVol.x - 0.5;
+    float z0 = floor(z);
+    float f = z - z0;
+    float u = clamp(c.x, uVol.z, uVol.w);
+    float s0 = clamp(z0, 0.0, uVol.x - 1.0);
+    float s1 = clamp(z0 + 1.0, 0.0, uVol.x - 1.0);
+    half4 a = tex2D<half4>(atlas, float2((s0 + u) * uVol.y, c.y));
+    half4 b = tex2D<half4>(atlas, float2((s1 + u) * uVol.y, c.y));
+    return lerp(a, b, half(f));
+#endif
+}
+
+float4 main(
+    float2 vTex0 : TEXCOORD0,
+    uniform sampler2D uTex0,
+    uniform sampler2D uTex1,
+    uniform sampler2D uTex2,
+    uniform sampler2D uTex3,
+    uniform sampler2D uTex4,
+    uniform sampler2D uTex5,
+    uniform sampler2D uTex6,
+    uniform float4 uC[6],
+    uniform float4 uVol,
+    uniform float4 uVol2,
+    uniform float4 uAlphaTest) : COLOR
+{
+    half4 c = tex2D<half4>(uTex0, vTex0);
+    if (uC[4].x > 0.0)
+    {
+        float depth = tex2D(uTex4, vTex0).x;
+        float far = 1.0 - (depth == 1.0 ? 0.999999881 : depth);
+        float blur = saturate(far * ((abs(1.0 / far - uC[3].x) - uC[3].y) * uC[3].z));
+        float bias = blur * uC[3].w;
+        half3 blurred = tex2Dbias<half4>(uTex3, float4(vTex0, 0.0, bias)).rgb;
+        half3 dof = lerp(c.rgb, blurred, half(saturate(bias)));
+        if (uC[5].x > 0.0)
+        {
+            half tint = blur > 0.0 ? 0.0 : 0.5;
+            dof = half3(half(1.0 - blur) * 0.300000012 + dof.x, dof.yz) + tint;
+        }
+        c.rgb = dof;
+    }
+    half3 graded = volume(uTex5, float3(c.rgb), uVol).rgb;
+    if (uC[1].z != 0.0)
+        graded = lerp(graded, volume(uTex6, float3(c.rgb), uVol2).rgb, half(uC[1].z));
+    half4 vignette = tex2D<half4>(uTex1, vTex0);
+    half grey = dot(half3(0.212500006, 0.715399981, 0.0720999986), graded);
+    graded = lerp(graded, half3(grey), saturate(vignette.g) * half(uC[1].y));
+    half3 bloom = tex2D<half4>(uTex2, vTex0).rgb * half(uC[2].x);
+    half3 result = graded * vignette.b + bloom;
+    c.rgb = lerp(result, half3(uC[0].rgb), half(uC[0].w)) * half(uC[1].x);
+#ifdef ATEST
+    if (half(uAlphaTest.x) * c.a < half(uAlphaTest.y))
+        discard;
+#endif
+    return c;
+}
