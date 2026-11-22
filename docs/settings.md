@@ -65,6 +65,10 @@ They go in `ux0:data/NFSCVITA/nfscvita.cfg`, one `key=value` per line; the first
 | `native_submit` | `1` | `0`: model submission into the draw list runs as translated code |
 | `native_flush` | `1` | `0`: the draw list flush runs as translated code |
 | `flush_fields` | `1` | `0`: the native flush reads the effect object's parameter handles and methods for every record instead of once per effect run |
+| `flush_prefetch` | `1` | `0`: the native flush does not request the guest data of the next records (record, world matrix, mesh, solid, mesh info, vertex buffer object) ahead of drawing them |
+| `flush_headlight` | `1` | `0`: the native flush reads the effect settings' headlight switch at every transform instead of once per effect run |
+| `effect_versions` | `1` | `0`: each effect parameter block keeps its change version with its values instead of in one shared array of versions, which CommitChanges reads for every draw |
+| `stamp_pairs` | `1` | `0`: the device writes the stamps of a constant upload with one loop per register instead of two registers per step |
 | `fused_matrices` | `1` | `0`: the effect layer transposes a matrix parameter into its shader registers at every upload, instead of the matrix setters writing those registers with the parameter |
 | `native_material` | `1` | `0`: the light material setter of the native flush runs as translated code |
 | `native_parts` | `1` | `0`: the bone and PCA weight setters and the stencil-masked draws of the native flush run as translated code |

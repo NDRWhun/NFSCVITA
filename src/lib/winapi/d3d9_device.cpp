@@ -32,6 +32,35 @@ enum : uint32_t
     ViewportWords = offsetof(FixedState, viewport) / 4
 };
 
+// stamp_pairs (default 1): the constant stamps are written two registers per step with a single last one; 0: one
+// loop over the registers.
+bool stampPairs()
+{
+    static const bool s_pairs = pf::Config::getBool("stamp_pairs", true);
+    return s_pairs;
+}
+
+void writeStamps(uint64_t* stamps, uint64_t stamp, uint32_t count)
+{
+    if (!stampPairs())
+    {
+        for (uint32_t i = 0; i < count; ++i)
+            stamps[i] = stamp;
+        return;
+    }
+    uint32_t i = 0;
+#if defined(__clang__)
+#pragma clang loop vectorize(disable)
+#endif
+    for (; i + 2 <= count; i += 2)
+    {
+        stamps[i] = stamp;
+        stamps[i + 1] = stamp;
+    }
+    if (i < count)
+        stamps[i] = stamp;
+}
+
 // The exponent of a ramp that is the same power curve in all three channels (within half an 8-bit step), else 0.
 float rampExponent(const WORD ramp[3][256])
 {
@@ -2045,9 +2074,7 @@ uint64_t Device::setConstants(bool pixel, uint32_t first, const float* values, u
 #endif
     m_constantLog[m_constantWrites++ % WriteLogSize] = Written{ uint16_t(first | (pixel ? 0x8000u : 0u)),
                                                                 uint16_t(count) };
-    uint64_t* stamps = (pixel ? m_psStamps : m_vsStamps) + first;
-    for (uint32_t i = 0; i < count; ++i)
-        stamps[i] = stamp;
+    writeStamps((pixel ? m_psStamps : m_vsStamps) + first, stamp, count);
     // Only the registers from the first to the last changed one are written and recorded.
     uint32_t begin = 0, end = count;
     while (begin < end && sameWords(bank + 4 * (first + begin), values + 4 * begin, 4))

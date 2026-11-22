@@ -21,6 +21,7 @@
 #include <map>
 #include <strings.h>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -377,6 +378,7 @@ struct Commit
     const State*    state;
     uint32_t        stage;          // sampler register of a sampler state
     bool            pixel;          // the constant's shader
+    const uint32_t* version;        // the block's version
 };
 
 // Handles below every guest address; larger values are names (D3DX accepts a name for a handle).
@@ -388,14 +390,79 @@ enum : x86::reg32
     HandleLimit = 0x1000
 };
 
+// effect_versions (default 1): the versions of the parameter blocks are words of one shared array in creation order;
+// 0: each in its block.
+bool versionsShared()
+{
+    static const bool s_shared = pf::Config::getBool("effect_versions", true);
+    return s_shared;
+}
+
+// Version words of the shared array: chunks that stay in place, freed words reused.
+class VersionWords
+{
+public:
+    uint32_t* take()
+    {
+        std::lock_guard<std::mutex> hold(m_mutex);
+        uint32_t* word;
+        if (!m_free.empty())
+        {
+            word = m_free.back();
+            m_free.pop_back();
+        }
+        else
+        {
+            if (m_chunks.empty() || m_used == ChunkWords)
+            {
+                m_chunks.emplace_back(new uint32_t[ChunkWords]);
+                m_used = 0;
+            }
+            word = m_chunks.back().get() + m_used++;
+        }
+        *word = 0;
+        return word;
+    }
+    void give(uint32_t* word)
+    {
+        std::lock_guard<std::mutex> hold(m_mutex);
+        m_free.push_back(word);
+    }
+
+private:
+    enum { ChunkWords = 4096 };
+    std::mutex                                  m_mutex;
+    std::vector<std::unique_ptr<uint32_t[]>>    m_chunks;
+    uint32_t                                    m_used = 0;
+    std::vector<uint32_t*>                      m_free;
+};
+
+VersionWords& versionWords()
+{
+    static VersionWords s_words;
+    return s_words;
+}
+
 // Values of a top-level parameter; texture slots hold guest COM pointers with a reference.
 struct Block
 {
+    // shared: the version is a word of the shared array (with effect_versions=1).
+    explicit Block(bool shared = false)
+        :   inArray(shared && versionsShared()), version(inArray ? *versionWords().take() : own)
+    {
+    }
+    Block(const Block&) = delete;
+    Block& operator=(const Block&) = delete;
+
     std::vector<uint8_t>    bytes;
     std::vector<uint8_t>    slotTypes;      // per dword: TypeBool/Int/Float, or the object type
-    uint32_t                version = 0;    // value of the change counter at the last write
+    const bool              inArray;        // version is a word of the shared array
+    uint32_t                own = 0;
+    uint32_t&               version;        // value of the change counter at the last write
     ~Block()
     {
+        if (inArray)
+            versionWords().give(&version);
         for (size_t i = 0; i < slotTypes.size(); ++i)
         {
             if (!isTexture(slotTypes[i]))
@@ -972,7 +1039,7 @@ bool Effect::parse(const uint8_t* data, uint32_t size, x86::reg32 guestData)
         const bool fresh = !block;
         if (fresh)
         {
-            block = std::make_shared<Block>();
+            block = std::make_shared<Block>(true);
             block->bytes.assign(m_params[size_t(p)].bytes, 0);
             block->slotTypes.assign(m_params[size_t(p)].bytes / 4, 0);
             if (shared)
@@ -1208,7 +1275,7 @@ void Effect::bindShaders()
                 ShaderBinding& shader = m_shaders[size_t(state.shader)];
                 for (ShaderConstant& c : shader.constants)
                 {
-                    pass.commits.push_back(Commit{ c.block, &c, nullptr, 0, shader.pixel });
+                    pass.commits.push_back(Commit{ c.block, &c, nullptr, 0, shader.pixel, &c.block->version });
                     if (c.layout == LayoutTranspose && !c.image.empty())
                         pass.fused.emplace_back(c.param, &c);
                 }
@@ -1216,12 +1283,13 @@ void Effect::bindShaders()
                     for (const State& s : m_params[size_t(sampler.first)].samplerStates)
                     {
                         if (s.kind != StateLiteral && s.block)
-                            pass.commits.push_back(Commit{ s.block, nullptr, &s, sampler.second, false });
+                            pass.commits.push_back(Commit{ s.block, nullptr, &s, sampler.second, false,
+                                                           &s.block->version });
                     }
             }
             else if (state.kind != StateLiteral && state.block)
             {
-                pass.commits.push_back(Commit{ state.block, nullptr, &state, 0, false });
+                pass.commits.push_back(Commit{ state.block, nullptr, &state, 0, false, &state.block->version });
             }
         }
     }
@@ -2650,7 +2718,7 @@ HRESULT Effect::CommitChanges(WinApplication* app, x86::CPU& cpu)
     const uint32_t since = m_applied;
     for (const Commit& c : m_passes[size_t(m_pass)].commits)
     {
-        if (c.block->version <= since)
+        if (*c.version <= since)
             continue;
         if (c.constant)
             uploadConstant(*c.constant, c.pixel);

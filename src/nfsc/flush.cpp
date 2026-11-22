@@ -388,7 +388,23 @@ struct EffectFields
     x86::reg32  ambient;
     x86::reg32  transformMethod, materialMethod;   // vtable +8 and +4
     bool        fixed;
+    bool        headlightOn;                        // the headlight handle set and [[e + 0x1754] + 0x14] == 1
 };
+
+// The headlight switch of the effect's settings is read with the fields, unless flush_headlight=0 (then at every
+// transform).
+bool headlightWithFields()
+{
+    static int s_headlight = -1;
+    if (s_headlight < 0)
+        s_headlight = pf::Config::getBool("flush_headlight", true) ? 1 : 0;
+    return s_headlight != 0;
+}
+
+bool headlightSet(x86::reg32 e, x86::reg32 headlight)
+{
+    return headlight && rc::ld32(rc::ld32(e + 0x1754) + 0x14) == 1;
+}
 
 void readFields(EffectFields& f, x86::reg32 e)
 {
@@ -404,6 +420,7 @@ void readFields(EffectFields& f, x86::reg32 e)
     f.eye = rc::ld32(e + 0xd40);
     f.light = rc::ld32(e + 0xd68);
     f.headlight = rc::ld32(e + 0xc78);
+    f.headlightOn = headlightWithFields() && headlightSet(e, f.headlight);
     f.ambient = rc::ld32(e + 0x778);
 }
 
@@ -414,6 +431,59 @@ bool fieldsPerRun()
     if (s_fields < 0)
         s_fields = pf::Config::getBool("flush_fields", true) ? 1 : 0;
     return s_fields != 0;
+}
+
+// The guest data of the records ahead is requested while the current one draws, unless flush_prefetch=0.
+bool prefetchAhead()
+{
+    static int s_prefetch = -1;
+    if (s_prefetch < 0)
+        s_prefetch = pf::Config::getBool("flush_prefetch", true) ? 1 : 0;
+    return s_prefetch != 0;
+}
+
+void prefetch(x86::reg32 address)
+{
+    __builtin_prefetch(rc::host(address));
+}
+
+// The record at sort position i.
+x86::reg32 recordAt(x86::reg32 keys, x86::reg32 i)
+{
+    return Records + rc::ld32(keys + 8 * i) * 0x68;
+}
+
+// Requests, while record i draws: record i + 3; the matrix, mesh, solid and first texture of record i + 2 (prefetched
+// one record before); the solid's mesh info and the vertex buffer object of record i + 1.
+void prefetchRecords(x86::reg32 keys, x86::reg32 i, x86::reg32 count)
+{
+    if (i + 3 < count)
+    {
+        const x86::reg32 r = recordAt(keys, i + 3);
+        prefetch(r);
+        prefetch(r + 0x67);
+    }
+    if (i + 2 < count)
+    {
+        const x86::reg32 r = recordAt(keys, i + 2);
+        const x86::reg32 matrix = rc::ld32(r + 0x38);
+        prefetch(matrix);
+        prefetch(matrix + 0x3f);
+        const x86::reg32 mesh = rc::ld32(r + 0x1c);
+        prefetch(mesh + 0x40);
+        prefetch(mesh + 0x7c);
+        prefetch(rc::ld32(r + 0x24));
+        prefetch(rc::ld32(r + 0x40) + 0x34);
+    }
+    if (i + 1 < count)
+    {
+        const x86::reg32 r = recordAt(keys, i + 1);
+        if (rc::ld32(r + 0x20) == 0)
+        {
+            prefetch(rc::ld32(rc::ld32(r + 0x24)) + 0x28);
+            prefetch(rc::ld32(rc::ld32(r + 0x1c) + 0x74) + 4);
+        }
+    }
 }
 
 // SetTransform (0x71e660, thiscall on the effect object e): view and projection when the view's frame or the effect
@@ -510,7 +580,7 @@ void setTransform(S& s, const EffectFields& f, x86::reg32 matrix, x86::reg32 vie
         }
     }
     const x86::reg32 headlight = f.headlight;
-    if (headlight && rc::ld32(rc::ld32(e + 0x1754) + 0x14) == 1)
+    if (headlightWithFields() ? f.headlightOn : headlightSet(e, headlight))
     {
         static const float bias[16] = { 0.5f, 0, 0, 0, 0, 0.5f, 0, 0, 0, 0, 0.5f, 0, 0.5f, 0.5f, 0.5f, 1 };
         float wvp[16], out[16];
@@ -1382,6 +1452,8 @@ void flush(win32::WinApplication* app, x86::CPU& cpu)
     {
         const x86::reg32 index = rc::ld32(keys + 8 * i);
         const x86::reg32 record = Records + index * 0x68;
+        if (prefetchAhead())
+            prefetchRecords(keys, i, rc::ld32(RecordCount));
         const x86::reg32 recordEffect = rc::ld32(record + 0x2c);
         const uint8_t low = rc::ld8(record + 0x64);
         if (current != recordEffect || lowLod != low)
