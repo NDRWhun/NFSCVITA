@@ -1,6 +1,7 @@
 #include "framephases.h"
 #include "display.h"
 #include "overlap.h"
+#include "scenery.h"
 #include "solids.h"
 
 #include <native.h>
@@ -25,7 +26,6 @@ void sub_7275a0_guest(win32::WinApplication* app, x86::CPU& cpu);
 void sub_72e5b0_guest(win32::WinApplication* app, x86::CPU& cpu);
 void sub_729770_guest(win32::WinApplication* app, x86::CPU& cpu);
 void sub_730cb0_guest(win32::WinApplication* app, x86::CPU& cpu);
-void sub_79afa0_guest(win32::WinApplication* app, x86::CPU& cpu);
 void sub_7d1c40_guest(win32::WinApplication* app, x86::CPU& cpu);
 void sub_72bc30_guest(win32::WinApplication* app, x86::CPU& cpu);
 void sub_74e350_guest(win32::WinApplication* app, x86::CPU& cpu);
@@ -432,9 +432,19 @@ NFSC_DISPLAY_TIMED(7275a0, Depth)
 NFSC_DISPLAY_TIMED(72e5b0, MainView)
 NFSC_DISPLAY_TIMED(729770, Post)
 NFSC_DISPLAY_TIMED(730cb0, Hud)
-// GrandSceneryCullInfo::StuffScenery, WorldModel::Render, the draw list sort, Render::PreDisplay, two set-up calls of
-// the 3D frame, the HUD layer's 2D call and its two light flare pool calls.
-NFSC_DISPLAY_TIMED(79afa0, SceneryCull)
+// GrandSceneryCullInfo::StuffScenery (native or translated, scenery.cpp), WorldModel::Render, the draw list sort,
+// Render::PreDisplay, two set-up calls of the 3D frame, the HUD layer's 2D call and its two light flare pool calls.
+void sub_79afa0(win32::WinApplication* app, x86::CPU& cpu)
+{
+    if (!pf::perf::enabled())
+    {
+        scenery::stuffSceneryEntry(app, cpu);
+        return;
+    }
+    const uint32_t start = pf::perf::now();
+    scenery::stuffSceneryEntry(app, cpu);
+    phases::addDisplay(phases::SceneryCull, pf::perf::now() - start);
+}
 NFSC_DISPLAY_TIMED(7d1c40, WorldModels)
 NFSC_DISPLAY_TIMED(72bc30, ListSort)
 NFSC_DISPLAY_TIMED(74e350, PreDisplay)

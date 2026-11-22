@@ -1,6 +1,8 @@
 // Native ports of the display call's hot game functions. Each keeps the guest stack frame, the arguments and the
 // thiscall object of every call, the memory it writes and the callee-saved registers as the translated code does;
-// display_ports=0 runs the translated bodies instead.
+// display_ports=0 runs the translated DrawAScenery instead, scenery_native (scenery.cpp) picks the other two.
+
+#include "scenery.h"
 
 #include <native.h>
 #include <platform/config.h>
@@ -11,6 +13,13 @@ namespace nfsc
 
 // Translated bodies of the overridden guest functions, and the guest functions the ports call.
 void sub_79fa60_guest(win32::WinApplication* app, x86::CPU& cpu);
+namespace native
+{
+void sub_559bd0(win32::WinApplication* app, x86::CPU& cpu);
+void sub_79fa60(win32::WinApplication* app, x86::CPU& cpu);
+void sub_7472d0(win32::WinApplication* app, x86::CPU& cpu);
+void sub_729320(win32::WinApplication* app, x86::CPU& cpu);
+}
 void sub_712c90(win32::WinApplication* app, x86::CPU& cpu);
 void sub_559bd0(win32::WinApplication* app, x86::CPU& cpu);
 void sub_79f9c0(win32::WinApplication* app, x86::CPU& cpu);
@@ -77,14 +86,115 @@ const x86::reg32 ConstNearDistance = 0x009ee7d0;
 const x86::reg32 ConstLodRatio = 0x009ee7dc;
 const x86::reg32 ConstWindScale = 0x009ee7a4;
 
+// GrandSceneryCullInfo::StuffScenery data; its leaf callees 0x558aa0, 0x402800 and 0x73a4b0 are inlined.
+const x86::reg32 ConstLightDistance = 0x009ee7f0;   // squared distance under which a model gets its own lights
+const x86::reg32 DrawingModel = 0x00b69c04;
+const x86::reg32 LightingOff = 0x00ab0a98;
+const x86::reg32 IdentityMatrix = 0x00b1def0;
+const x86::reg32 WorldLights = 0x00a6cfe0;
+const x86::reg32 FrameCursor = 0x00a8ff34;
+const x86::reg32 FrameLimit = 0x00a8ff38;
+const x86::reg32 FrameFull = 0x00a8ff44;
+const x86::reg32 FrameOverflow = 0x00a8ff48;
+const x86::reg32 ModelCounts = 0x00b42960;
+const x86::reg32 ModelMeshes = 0x00b42e48;
+const x86::reg32 LightContextSize = 0x1d0;
+
+// Logs a call of the plan: callee, esp at its entry, its object (0 for cdecl), then its stack arguments.
+void logCall(scenery::Plan& plan, x86::reg32 callee, x86::reg32 esp, x86::reg32 object,
+             std::initializer_list<x86::reg32> args)
+{
+    plan.calls.push_back(callee);
+    plan.calls.push_back(esp);
+    plan.calls.push_back(object);
+    plan.calls.insert(plan.calls.end(), args);
 }
 
-namespace native
+// What StuffScenery's inlined leaf functions write: to guest memory, or to the plan.
+class StuffWrites
+{
+public:
+    explicit StuffWrites(scenery::Plan* plan) : m_plan(plan) {}
+
+    x86::reg32 model() const
+    {
+        return m_plan ? m_plan->model : rc::ld32(DrawingModel);
+    }
+
+    void setModel(x86::reg32 model)
+    {
+        if (m_plan)
+            m_plan->model = model;
+        else
+            rc::st32(DrawingModel, model);
+    }
+
+    // 0x402800: bytes rounded up to 16 from the frame block, 0 (and the overflow counted) when they do not fit.
+    x86::reg32 allocate(x86::reg32 bytes)
+    {
+        const x86::reg32 size = (bytes + 0xf) & ~0xfu;
+        const x86::reg32 cursor = m_plan ? m_plan->frameCursor : rc::ld32(FrameCursor);
+        const x86::reg32 end = cursor + size;
+        if (end < rc::ld32(FrameLimit))
+        {
+            if (m_plan)
+                m_plan->frameCursor = end;
+            else
+                rc::st32(FrameCursor, end);
+            return cursor;
+        }
+        if (m_plan)
+        {
+            m_plan->frameFull = 1;
+            m_plan->frameOverflow += size;
+        }
+        else
+        {
+            rc::st32(FrameFull, 1);
+            rc::st32(FrameOverflow, rc::ld32(FrameOverflow) + size);
+        }
+        return 0;
+    }
+
+    // 0x73a4b0: one model of the kind drawn, with its mesh count.
+    void count(x86::reg32 kind, x86::reg32 model)
+    {
+        const x86::reg32 solid = rc::ld32(model + 0xc);
+        if (!solid)
+            return;
+        const x86::reg32 meshes = x86::reg32(x86::sreg32(x86::sreg16(rc::ld16(solid + 0x14))));
+        if (m_plan)
+        {
+            ++m_plan->modelCounts[kind & 7];
+            m_plan->modelMeshes[kind & 7] += meshes;
+            return;
+        }
+        rc::st32(ModelCounts + kind * 4, rc::ld32(ModelCounts + kind * 4) + 1);
+        rc::st32(ModelMeshes + kind * 4, rc::ld32(ModelMeshes + kind * 4) + meshes);
+    }
+
+private:
+    scenery::Plan* m_plan;
+};
+
+// 0x558aa0 (thiscall: model): whether the model's solid takes per-model lights.
+bool usesLights(x86::reg32 model)
+{
+    const x86::reg32 solid = rc::ld32(model + 0xc);
+    if (!solid)
+        return false;
+    const x86::reg16 flags = rc::ld16(solid + 0xe);
+    return (flags & 0x40) || (flags & 0x800);
+}
+
+}
+
+namespace scenery
 {
 
 // ScenerySectionHeader::DrawAScenery (0x79fa60, thiscall, ret 0xc): culls one scenery instance of the section
 // against the cull info's view and level of detail and appends its model to the cull info's draw list.
-void sub_79fa60(win32::WinApplication* app, x86::CPU& cpu)
+void drawAScenery(win32::WinApplication* app, x86::CPU& cpu)
 {
     if (!useNative())
     {
@@ -381,6 +491,327 @@ void sub_79fa60(win32::WinApplication* app, x86::CPU& cpu)
     rc::st32(entry + 4, matrix);
     rc::st32(entry + 8, info);
     finish();
+}
+
+// ScenerySectionHeader::TreeCull (0x79fdb0, thiscall: cull info; ret 4): walks the scenery tree with node and state
+// stacks in the frame; nodes in state 1 are tested against the view, scenery children go to DrawAScenery.
+bool treeCull(win32::WinApplication* app, x86::CPU& cpu, Plan* plan)
+{
+    const x86::reg32 esp0 = cpu.esp;
+    // sub esp, 0x14c; push ebx, ebp, esi, edi.
+    const x86::reg32 frame = esp0 - 0x15c;
+    rc::st32(frame + 0xc, cpu.ebx);
+    rc::st32(frame + 8, cpu.ebp);
+    rc::st32(frame + 4, cpu.esi);
+    rc::st32(frame, cpu.edi);
+    x86::reg32 header = cpu.ecx;
+    rc::st32(frame + 0x18, header);
+    rc::st32(frame + 0x5c, rc::ld32(header + 0x2c));
+    rc::st8(frame + 0x1c, 1);
+    const x86::reg32 stackBottom = frame + 0x5c;
+    x86::reg32 nodes = frame + 0x60;
+    x86::reg32 states = frame + 0x1d;
+    GuestStack stack{ app, cpu, frame };
+    do
+    {
+        x86::reg8 state = rc::ld8(states - 1);
+        const x86::reg32 node = rc::ld32(nodes - 4);
+        nodes -= 4;
+        --states;
+        cpu.ebp = node;
+        cpu.esi = nodes;
+        cpu.edi = states;
+        if (state == 1)
+        {
+            const x86::reg32 cull = rc::ld32(frame + 0x160);
+            stack.esp = frame;
+            stack.push(0);
+            stack.push(node + 0x10);
+            stack.push(node);
+            cpu.ecx = rc::ld32(cull);
+            if (plan)
+                logCall(*plan, 0x559bd0, stack.esp - 4, cpu.ecx, { node, node + 0x10, 0 });
+            if (!stack.call(&native::sub_559bd0, 0x79fdf6))
+                return false;
+            header = rc::ld32(frame + 0x18);
+            state = x86::reg8(cpu.eax);
+        }
+        if (state && x86::sreg16(rc::ld16(node + 0xc)) > 0)
+        {
+            x86::reg32 child = node + 0x1c;
+            x86::sreg32 k = 0;
+            do
+            {
+                const x86::sreg32 index = x86::sreg16(rc::ld16(child));
+                if (index >= 0)
+                {
+                    stack.esp = frame;
+                    stack.push(state);
+                    const x86::reg32 cull = rc::ld32(frame + 0x160);
+                    stack.push(cull);
+                    stack.push(x86::reg32(index));
+                    cpu.ecx = header;
+                    cpu.ebx = state;
+                    if (plan)
+                        logCall(*plan, 0x79fa60, stack.esp - 4, header, { x86::reg32(index), cull, state });
+                    else if (!stack.call(&native::sub_79fa60, 0x79fe37))
+                        return false;
+                    header = rc::ld32(frame + 0x18);
+                }
+                else
+                {
+                    // A plan stops where the translated code would write the node stack over its return address.
+                    if (plan && nodes >= esp0)
+                        return false;
+                    rc::st32(nodes, rc::ld32(header + 0x2c) - x86::reg32(index) * 0x30);
+                    nodes += 4;
+                    rc::st8(states, state);
+                    ++states;
+                }
+                child += 2;
+                ++k;
+            } while (k < x86::sreg16(rc::ld16(node + 0xc)));
+        }
+    } while (nodes != stackBottom);
+    cpu.edi = rc::ld32(frame);
+    cpu.esi = rc::ld32(frame + 4);
+    cpu.ebp = rc::ld32(frame + 8);
+    cpu.ebx = rc::ld32(frame + 0xc);
+    cpu.ecx = header;
+    cpu.esp = esp0 + 8;
+    return true;
+}
+
+void treeCullNative(win32::WinApplication* app, x86::CPU& cpu)
+{
+    treeCull(app, cpu, nullptr);
+}
+
+// GrandSceneryCullInfo::StuffScenery (0x79afa0, thiscall: view, flags; ret 8): submits the view's culled models
+// (0x729320) with their render flags; models with own lights near the eye get a light context.
+bool stuffScenery(win32::WinApplication* app, x86::CPU& cpu, Plan* plan)
+{
+    const x86::reg32 esp0 = cpu.esp;
+    const x86::reg32 grand = cpu.ecx;
+    const x86::reg32 ebx0 = cpu.ebx, esi0 = cpu.esi, edi0 = cpu.edi, ebp0 = cpu.ebp;
+    const x86::reg32 view = rc::ld32(esp0 + 4);
+    const x86::reg32 flags = rc::ld32(esp0 + 8);
+    const x86::reg32 eye = rc::ld32(view + 0x40) + 0x40;
+    x86::reg32 exclude = 0, required = 0, include = 0;
+    if (flags & 1)
+        exclude = 0x1000;
+    if (flags & 0x400)
+        include = 0x100000;
+    if (flags & 0x80)
+        exclude |= 0x100;
+    if (flags & 0x10)
+        include = 0x2000;
+    else if (flags & 8)
+        required = 0x2000;
+    const bool lightingFlag = (flags & 0x100) != 0;
+    if (lightingFlag || (flags & 0x2200))
+        include = 0x10000;
+    if (flags & 0x800)
+        required |= 0x400000;
+    if (flags & 0x1000)
+        include = 0x1000000;
+    // The view argument slot holds the include mask from here on.
+    if (plan)
+        plan->argumentSlot = include;
+    else
+        rc::st32(esp0 + 4, include);
+    StuffWrites writes(plan);
+    const auto finish = [&]()
+    {
+        cpu.ebx = ebx0;
+        cpu.esi = esi0;
+        cpu.edi = edi0;
+        cpu.ebp = ebp0;
+        cpu.esp = esp0 + 0xc;
+    };
+    const x86::sreg32 count = x86::sreg32(rc::ld32(grand + 0x3c0));
+    x86::reg32 info = grand;
+    x86::sreg32 i = 0;
+    while (i < count && rc::ld32(info) != view)
+    {
+        ++i;
+        info += 0x50;
+    }
+    if (i >= count)
+    {
+        finish();
+        return true;
+    }
+    x86::reg32 entry = rc::ld32(info + 8);
+    if (entry >= rc::ld32(info + 0xc))
+    {
+        finish();
+        return true;
+    }
+    // sub esp, 0x14; push ebx, esi, ebp, edi.
+    const x86::reg32 frame = esp0 - 0x24;
+    GuestStack stack{ app, cpu, frame };
+    cpu.ebx = view;
+    do
+    {
+        cpu.ebp = entry;
+        x86::reg32 sceneryFlags = rc::ld32(rc::ld32(entry + 8) + 0xc);
+        bool skip = (sceneryFlags & 0x80000) && rc::ld32(LightingOff);
+        if (!skip && (sceneryFlags & 0x40000) && !rc::ld32(LightingOff) && !(sceneryFlags & 0x100))
+            skip = true;
+        if (!skip)
+        {
+            const x86::reg32 word = rc::ld32(entry);
+            const x86::reg32 model = word & ~3u;
+            writes.setModel(model);
+            sceneryFlags = rc::ld32(rc::ld32(entry + 8) + 0xc);
+            x86::reg32 bits = exclude;
+            if (sceneryFlags & 0x10000)
+                bits |= 0x200;
+            if (sceneryFlags & 0x200)
+                bits |= 0x2000;
+            if (sceneryFlags & 0x1000000)
+                bits |= 0x100000;
+            if (sceneryFlags & 0x100)
+                bits |= 0x1020000;
+            if (sceneryFlags & 0x400000)
+                bits |= 0x40000;
+            if (sceneryFlags & 0x20000)
+                bits |= 0x800000;
+            if (sceneryFlags & 0x80000)
+                bits |= 0x400000;
+            const bool bit26 = (sceneryFlags >> 26) & 1;
+            if (flags & 0x200)
+            {
+                if ((sceneryFlags & 0x100000) && !bit26)
+                    bits |= 0x10000;
+                if ((sceneryFlags & 0x200000) && !bit26)
+                    bits |= 0x10000;
+                if (sceneryFlags & 0x40000000)
+                    bits |= 0x10000;
+            }
+            if ((flags & 0x2000) && (sceneryFlags & 0x40000000))
+                bits |= 0x10000;
+            if (lightingFlag && (sceneryFlags & 0x40300000))
+                bits |= 0x10000;
+            if ((word & 3) == 2)
+                bits |= 4;
+            const bool unmasked = !include && !required;
+            const bool notExcluded = required && !(required & bits);
+            if (unmasked || (bits & include) || notExcluded)
+            {
+                cpu.esi = bits;
+                bool draw = true;
+                x86::reg32 drawModel, matrix, light = 0;
+                if (!rc::ld32(entry + 4))
+                {
+                    drawModel = model;
+                    matrix = IdentityMatrix;
+                }
+                else if (!usesLights(model))
+                {
+                    drawModel = writes.model();
+                    matrix = rc::ld32(entry + 4);
+                }
+                else
+                {
+                    const x86::reg32 m = rc::ld32(entry + 4);
+                    x86::Float dx = x86::Float(rc::ldf32(m + 0x30));
+                    dx -= x86::Float(x86::Float(rc::ldf32(eye)));
+                    x86::Float dy = x86::Float(rc::ldf32(m + 0x34));
+                    dy -= x86::Float(x86::Float(rc::ldf32(eye + 4)));
+                    x86::Float dz = x86::Float(rc::ldf32(m + 0x38));
+                    dz -= x86::Float(x86::Float(rc::ldf32(eye + 8)));
+                    x86::Float sum = dz;
+                    sum *= x86::Float(dz);
+                    x86::Float term = dy;
+                    term *= x86::Float(dy);
+                    sum += term;
+                    term = dx;
+                    term *= x86::Float(dx);
+                    sum += term;
+                    cpu.fpu.compare(sum, x86::Float(rc::ldf32a(ConstLightDistance)));
+                    const x86::reg8 near = x86::reg8(x86::reg8(cpu.fpu.status.word >> 8) & 5);
+                    if (!x86::parity8(near))
+                    {
+                        drawModel = writes.model();
+                        matrix = rc::ld32(entry + 4);
+                        light = rc::ld32(view + 0x4c);
+                    }
+                    else
+                    {
+                        stack.esp = frame;
+                        stack.push(LightContextSize);
+                        const x86::reg32 context = writes.allocate(LightContextSize);
+                        cpu.edi = context;
+                        if (!context)
+                        {
+                            draw = false;
+                            drawModel = matrix = 0;
+                        }
+                        else
+                        {
+                            const x86::reg32 solid = rc::ld32(writes.model() + 0xc);
+                            const x86::reg32 solidFlags = rc::ld16(solid + 0xe);
+                            const x86::reg32 camera = rc::ld32(view + 0x40);
+                            const x86::reg32 modelMatrix = rc::ld32(entry + 4);
+                            stack.esp = frame;
+                            stack.push(solidFlags);
+                            stack.push(view);
+                            stack.push(eye);
+                            stack.push(camera);
+                            stack.push(modelMatrix);
+                            stack.push(WorldLights);
+                            stack.push(context);
+                            if (plan)
+                                logCall(*plan, 0x7472d0, stack.esp - 4, 0,
+                                        { context, WorldLights, modelMatrix, camera, eye, view, solidFlags });
+                            else if (!stack.call(&native::sub_7472d0, 0x79b2a3))
+                                return false;
+                            matrix = rc::ld32(entry + 4);
+                            drawModel = writes.model();
+                            light = context;
+                            bits &= ~0x200u;
+                            cpu.esi = bits;
+                        }
+                    }
+                }
+                if (draw)
+                {
+                    stack.esp = frame;
+                    stack.push(0);
+                    stack.push(0);
+                    stack.push(bits);
+                    stack.push(light);
+                    stack.push(matrix);
+                    stack.push(drawModel);
+                    cpu.ecx = view;
+                    if (plan)
+                        logCall(*plan, 0x729320, stack.esp - 4, view, { drawModel, matrix, light, bits, 0, 0 });
+                    else if (!stack.call(&native::sub_729320, 0x79b2ed))
+                        return false;
+                }
+                const x86::reg32 viewId = rc::ld32(view + 8);
+                x86::reg32 kind = 4;
+                if (viewId == 4 || viewId == 5)
+                    kind = 5;
+                else if (x86::sreg32(viewId) >= 0x16 && x86::sreg32(viewId) <= 0x1b)
+                    kind = 3;
+                else if (viewId == 3)
+                    kind = 6;
+                writes.count(kind, writes.model());
+                writes.setModel(0);
+            }
+        }
+        entry += 0xc;
+    } while (entry < rc::ld32(info + 0xc));
+    finish();
+    return true;
+}
+
+void stuffSceneryNative(win32::WinApplication* app, x86::CPU& cpu)
+{
+    stuffScenery(app, cpu, nullptr);
 }
 
 }

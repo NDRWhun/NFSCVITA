@@ -124,6 +124,7 @@ NATIVE_OVERRIDES = [
     0x7f8bd0,   # road spline smoothing system
     0x7f9d90,   # road spline smoothing pass
     0x8088e0,   # WRoadNav::UpdateOccludedPosition
+    0x8078f0,   # WRoadNav road cookies of nearby vehicles
     0x7fb180,   # AI best line curvature ahead
     0x7f8930,   # closest road point passed
     0x7e7d40,   # next triangle of a packed collision strip
@@ -252,6 +253,9 @@ NATIVE_OVERRIDES = [
     0x521860,   # EAXAemsManager::Update (on the game thread when the audio thread reaches it)
     0x8cf74b,   # Csis::System::Lock, the audio System lock (counted for perf_log)
     0x79fa60,   # ScenerySectionHeader::DrawAScenery (src/nfsc/displayports.cpp)
+    0x79fdb0,   # ScenerySectionHeader::TreeCull (src/nfsc/displayports.cpp)
+    0x559bd0,   # eView::GetVisibleState (shadow_scenery records its calls)
+    0x7472d0,   # light context set-up of StuffScenery (shadow_scenery records its calls)
     0x72eba0,   # 3D frame (src/nfsc/framephases.cpp: timed per frame with perf_log)
     0x72e0f0,   # road reflection pass
     0x72e460,   # car environment map face
@@ -290,6 +294,10 @@ NATIVE_OVERRIDES = [
     0x750c30,   # HUD layer light flare pool
     0x750d40,   # HUD layer light flare pool
     0x6fca30,   # SuspensionSimple::DoWheelForces (src/nfsc/physics.cpp)
+    0x813290,   # WCollisionMgr::GetTriList (src/nfsc/collision.cpp)
+    0x6c73a0,   # Wheel::UpdatePosition (src/nfsc/vehicle.cpp)
+    0x817090,   # WWorldPos::Update
+    0x431700,   # AIVehiclePid::OnSteering
     0x5fcdc0,   # FEPackage::UpdateObject with its groups, tracks and interpolation (src/nfsc/feng.cpp)
 ]
 

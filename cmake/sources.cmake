@@ -90,7 +90,9 @@ set(NFSC_GAME_PORT_SOURCES
   src/nfsc/audio_decode.cpp
   src/nfsc/audioupdate.cpp
   src/nfsc/bankcode.cpp
+  src/nfsc/banklib.cpp
   src/nfsc/bench.cpp
+  src/nfsc/collision.cpp
   src/nfsc/defer.cpp
   src/nfsc/display.cpp
   src/nfsc/displayports.cpp
@@ -111,9 +113,12 @@ set(NFSC_GAME_PORT_SOURCES
   src/nfsc/physics.cpp
   src/nfsc/pools.cpp
   src/nfsc/prompts.cpp
+  src/nfsc/scenery.cpp
+  src/nfsc/shadow.cpp
   src/nfsc/sim.cpp
   src/nfsc/solids.cpp
   src/nfsc/streaming.cpp
+  src/nfsc/vehicle.cpp
   src/nfsc/vp6.cpp
   src/nfsc/vp6_native.cpp
   src/nfsc/worldtex.cpp

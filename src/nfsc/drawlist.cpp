@@ -3,6 +3,7 @@
 // turns it off; the translated body runs then, and for the shadow pass and texture lookups it cannot make.
 
 #include "hot.h"
+#include "scenery.h"
 
 #include <native.h>
 #include <platform/config.h>
@@ -220,6 +221,7 @@ namespace native
 // a record per mesh of the model's solid that is in view and not hidden.
 void sub_729320(win32::WinApplication* app, x86::CPU& cpu)
 {
+    scenery::Recorded recorded(0x729320, cpu, 6, true);
     if (!enabled())
     {
         sub_729320_guest(app, cpu);

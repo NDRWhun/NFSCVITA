@@ -3,6 +3,7 @@
 // bodies instead.
 
 #include "sim.h"
+#include "shadow.h"
 
 #include <native.h>
 #include <platform/config.h>
@@ -32,6 +33,14 @@ void sub_7e7eb0_guest(win32::WinApplication* app, x86::CPU& cpu);
 void sub_7ecc70(win32::WinApplication* app, x86::CPU& cpu);
 void sub_8088e0_guest(win32::WinApplication* app, x86::CPU& cpu);
 void sub_8078f0(win32::WinApplication* app, x86::CPU& cpu);
+void sub_8078f0_guest(win32::WinApplication* app, x86::CPU& cpu);
+void sub_7f8930(win32::WinApplication* app, x86::CPU& cpu);
+void sub_807490(win32::WinApplication* app, x86::CPU& cpu);
+void sub_807690(win32::WinApplication* app, x86::CPU& cpu);
+void sub_64a600(win32::WinApplication* app, x86::CPU& cpu);
+void sub_4044d0(win32::WinApplication* app, x86::CPU& cpu);
+void sub_606b60(win32::WinApplication* app, x86::CPU& cpu);
+void sub_7ec4f0(win32::WinApplication* app, x86::CPU& cpu);
 
 namespace native
 {
@@ -211,6 +220,15 @@ bool roadnav2Native()
     return s_roadnav2 != 0;
 }
 
+int s_roadnav3 = -1;
+
+bool roadnav3Native()
+{
+    if (s_roadnav3 < 0)
+        s_roadnav3 = pf::Config::getBool("roadnav3_native", true) ? 1 : 0;
+    return s_roadnav3 != 0;
+}
+
 // Road spline system solve (cdecl: system, factors, right-hand side), 0x7ecc70: forward elimination of the
 // right-hand side with the reduction's factors, then back substitution, each value stored as a float. Sets eax, ecx
 // and edx as the translated body leaves them.
@@ -262,109 +280,26 @@ void solveSystem(x86::CPU& cpu, x86::reg32 system, x86::reg32 factors, x86::reg3
     cpu.edx = edx;
 }
 
-// shadow_roadnav=1: each call of a road navigation port runs the translated body on a copy of the CPU, then the
-// native one from the same guest memory, and compares the registers, the x87 stack and the memory it writes.
-struct ShadowRegion
-{
-    x86::reg32 address, size;
-};
-
-int s_shadow = -1;
-bool s_shadowRunning = false;
-uint32_t s_shadowCompared = 0, s_shadowDiffer = 0;
+// shadow_roadnav=1: road navigation port calls compared with their translated bodies.
+shadow::Group s_shadow("shadow_roadnav");
 
 bool shadowOn()
 {
-    if (s_shadow < 0)
-        s_shadow = pf::Config::getBool("shadow_roadnav", false) ? 1 : 0;
-    return s_shadow != 0 && !s_shadowRunning;
+    return s_shadow.active();
 }
 
-// Logs a difference of the current call while fewer than 16 calls differed before it.
-void shadowReport(const char* name, const char* what, x86::reg32 guest, x86::reg32 native, int& found)
-{
-    ++found;
-    if (s_shadowDiffer < 16)
-        pf::logInfo("shadow_roadnav: %s call %u: %s translated 0x%08x native 0x%08x", name, unsigned(s_shadowCompared),
-                    what, unsigned(guest), unsigned(native));
-}
-
-// Registers compared, by bit in the order eax, ecx, edx, ebx, esp, ebp, esi, edi, then the x87 status word: all, or
-// the ones the callers read.
-constexpr x86::reg32 AllRegisters = 0x1ff;
-constexpr x86::reg32 LiveEaxEbxEbp = 0x139;
+// Registers compared (shadow::Group): all, or the ones the callers read.
+constexpr x86::reg32 AllRegisters = shadow::AllRegisters;
+constexpr x86::reg32 LiveEaxEbxEbp = 0x39;
 constexpr x86::reg32 CalleeSaved = 0xf8;
+constexpr x86::reg32 LiveEbxEbpEdi = 0xb8;
 
 // Runs port (the native entry, with the shadow off) after the translated body guest; regions: the guest memory
 // either may write.
 void shadowCall(const char* name, win32::WinApplication* app, x86::CPU& cpu, win32::MethodPtr guest,
-                win32::MethodPtr port, std::initializer_list<ShadowRegion> regions, x86::reg32 live = AllRegisters)
+                win32::MethodPtr port, std::initializer_list<shadow::Region> regions, x86::reg32 live = AllRegisters)
 {
-    s_shadowRunning = true;
-    std::vector<x86::reg8> before, translated;
-    for (const ShadowRegion& r : regions)
-        before.insert(before.end(), rc::host(r.address), rc::host(r.address) + r.size);
-    x86::CPU reference = cpu;
-    guest(app, reference);
-    size_t at = 0;
-    for (const ShadowRegion& r : regions)
-    {
-        translated.insert(translated.end(), rc::host(r.address), rc::host(r.address) + r.size);
-        memcpy(rc::host(r.address), before.data() + at, r.size);
-        at += r.size;
-    }
-    port(app, cpu);
-    s_shadowRunning = false;
-    if (reference.terminate || cpu.terminate)
-    {
-        cpu.terminate = true;
-        return;
-    }
-    ++s_shadowCompared;
-    int found = 0;
-    const x86::reg32 g[] = { reference.eax, reference.ecx, reference.edx, reference.ebx, reference.esp,
-                             reference.ebp, reference.esi, reference.edi };
-    const x86::reg32 n[] = { cpu.eax, cpu.ecx, cpu.edx, cpu.ebx, cpu.esp, cpu.ebp, cpu.esi, cpu.edi };
-    static const char* const names[] = { "eax", "ecx", "edx", "ebx", "esp", "ebp", "esi", "edi" };
-    for (int i = 0; i < 8; ++i)
-    {
-        if ((live >> i & 1) && g[i] != n[i])
-            shadowReport(name, names[i], g[i], n[i], found);
-    }
-    if (reference.fpu.count != cpu.fpu.count)
-    {
-        shadowReport(name, "x87 depth", reference.fpu.count, cpu.fpu.count, found);
-    }
-    else if (reference.fpu.count != 0)
-    {
-        x86::reg64 a, b;
-        static_assert(sizeof(a) == sizeof(x86::Float), "x87 registers are doubles");
-        memcpy(&a, &reference.fpu.st(0), sizeof(a));
-        memcpy(&b, &cpu.fpu.st(0), sizeof(b));
-        if (a != b)
-            shadowReport(name, "st0 high word", x86::reg32(a >> 32), x86::reg32(b >> 32), found);
-        if (x86::reg32(a) != x86::reg32(b))
-            shadowReport(name, "st0 low word", x86::reg32(a), x86::reg32(b), found);
-    }
-    if ((live & 0x100) && reference.fpu.status.word != cpu.fpu.status.word)
-        shadowReport(name, "x87 status", reference.fpu.status.word, cpu.fpu.status.word, found);
-    at = 0;
-    for (const ShadowRegion& r : regions)
-    {
-        for (x86::reg32 i = 0; i < r.size; ++i)
-        {
-            if (translated[at + i] != *rc::host(r.address + i))
-            {
-                char what[48];
-                snprintf(what, sizeof(what), "byte at 0x%08x", unsigned(r.address + i));
-                shadowReport(name, what, translated[at + i], *rc::host(r.address + i), found);
-                break;
-            }
-        }
-        at += r.size;
-    }
-    if (found)
-        ++s_shadowDiffer;
+    s_shadow.call(name, app, cpu, guest, port, regions, live);
 }
 
 }
@@ -374,9 +309,7 @@ namespace sim
 
 void logShadow()
 {
-    if (s_shadow > 0)
-        pf::logInfo("shadow_roadnav: %u calls compared, %u differ", unsigned(s_shadowCompared),
-                    unsigned(s_shadowDiffer));
+    s_shadow.log();
 }
 
 }
@@ -1980,6 +1913,699 @@ void sub_8088e0(win32::WinApplication* app, x86::CPU& cpu)
         rc::st32(self + 0x6c, 0);
         rc::st8(self + 0x5e, 0);
     }
+    finish();
+}
+
+// UTL::COM::Object::_IList::Find, 0x60cb50: the interface of id in a list of (id, interface) pairs sorted by id
+// (begin at +0, end at +4), 0 when it has none.
+static x86::reg32 findInterface(x86::reg32 list, x86::reg32 id)
+{
+    x86::reg32 p = rc::ld32(list);
+    const x86::reg32 end = rc::ld32(list + 4);
+    x86::sreg32 count = x86::sreg32(end - p) >> 3;
+    while (count > 0)
+    {
+        const x86::sreg32 half = count >> 1;
+        if (rc::ld32(p + x86::reg32(half) * 8) < id)
+        {
+            p += x86::reg32(half) * 8 + 8;
+            count += -1 - half;
+        }
+        else
+        {
+            count = half;
+        }
+    }
+    return p != end && rc::ld32(p) == id ? rc::ld32(p + 4) : 0;
+}
+
+// (x - low) / (high - low) as a float clamped to 0..1, 0 for an empty range (0x401fb0).
+static double rampTo(float x, float low, float high)
+{
+    const double zero = rc::ldf32a(0x9c248c);
+    const double one = rc::ldf32a(0x9c2478);
+    const double range = double(high) - double(low);
+    if (!(range > double(rc::ldf32a(0x9c1760))))
+        return zero;
+    const float t = float((double(x) - double(low)) / range);
+    if (!(double(t) < one))
+        return one;
+    return zero > double(t) ? zero : double(t);
+}
+
+// a clamped to low..high (0x4010e0): the larger of a and low, then the smaller of that and high.
+static double clampTo(float a, float low, float high)
+{
+    const float larger = a > low ? a : low;
+    return high < larger ? high : larger;
+}
+
+// Vector (x, y, z) scaled to unit length (0x411d40): zero when its squared length is at most the epsilon.
+static void unit3(const float v[3], float out[3])
+{
+    const double x = v[0], y = v[1], z = v[2];
+    const double zero = rc::ldf32a(0x9c248c);
+    const float length2 = float((x * x + y * y) + z * z);
+    double scale = zero;
+    if (double(length2) > double(rc::ldf32a(0x9c1760)))
+    {
+        const double length = std::sqrt(double(length2));
+        scale = length == zero ? zero : double(rc::ldf32a(0x9c2478)) / length;
+    }
+    out[0] = float(scale * x);
+    out[1] = float(scale * y);
+    out[2] = float(scale * z);
+}
+
+// 0x7f8a70 (pointers in ecx, esi, eax, edx): the closing speed of velocities v and w along the line from q to p into
+// closing, and the time to it (the constant at 0x9ca2c4 when the relative speed is near 0).
+static double cookieTime(const float p[3], const float q[3], const float v[3], const float w[3], float& closing)
+{
+    const float d[3] = { float(double(p[0]) - double(q[0])), float(double(p[1]) - double(q[1])),
+                         float(double(p[2]) - double(q[2])) };
+    const float e[3] = { float(double(v[0]) - double(w[0])), float(double(v[1]) - double(w[1])),
+                         float(double(v[2]) - double(w[2])) };
+    float n[3];
+    unit3(d, n);
+    closing = float(-((double(e[2]) * double(n[2]) + double(e[1]) * double(n[1])) + double(e[0]) * double(n[0])));
+    const double speed2 = (double(e[2]) * double(e[2]) + double(e[1]) * double(e[1])) + double(e[0]) * double(e[0]);
+    if (speed2 < double(rc::ldf32a(0x9c2ef0)))
+        return rc::ldf32a(0x9ca2c4);
+    const double dot = (double(d[2]) * double(e[2]) + double(d[1]) * double(e[1])) + double(e[0]) * double(d[0]);
+    return dot * (double(rc::ldf32a(0x9c2914)) / speed2);
+}
+
+// 0x7ec6e0 (points, count): each point flagged in bit 0 of +0x28 gets its centre between its edges at +0x30/+0x38
+// and its lateral bounds at +0x20/+0x24 from half its width.
+static void centrePoints(x86::reg32 points, x86::reg32 count)
+{
+    const double half = rc::ldf32a(0x9c2888);
+    for (x86::reg32 i = 0; x86::sreg32(i) < x86::sreg32(count); ++i)
+    {
+        const x86::reg32 p = points + (i << 6);
+        if (!(rc::ld8(p + 0x28) & 1))
+            continue;
+        auto ld = [](x86::reg32 address) { return double(rc::ldf32(address)); };
+        rc::stf32(p + 0x30, float((ld(p) + ld(p + 8)) * half));
+        rc::stf32(p + 0x38, float((ld(p + 4) + ld(p + 0xc)) * half));
+        const double extent = (ld(p + 0x24) - ld(p + 0x20)) * half;
+        rc::stf32(p + 0x24, float(extent));
+        rc::stf32(p + 0x20, float(-extent));
+    }
+}
+
+// Road cookies of nearby vehicles (thiscall: navigator, road points, count, side offset, heading, along the road;
+// ret 0x14), 0x8078f0: for each vehicle near the navigator's AI within the height band of the road ahead, tests
+// whether it blocks the path and cuts the road points around it (0x7ec4f0), recording the closest blocker.
+void sub_8078f0(win32::WinApplication* app, x86::CPU& cpu)
+{
+    using x86::sreg32;
+    const x86::reg32 self = cpu.ecx;
+    const x86::reg32 entry = cpu.esp;
+    const x86::reg32 points = rc::ld32(entry + 4);
+    const x86::reg32 count = rc::ld32(entry + 8);
+    if (shadowOn())
+    {
+        shadowCall("road cookies 0x8078f0", app, cpu, &sub_8078f0_guest, &sub_8078f0,
+                   { { self, 0x184 }, { points, sreg32(count) > 0 && count <= 1024 ? count << 6 : 0 } },
+                   LiveEbxEbpEdi);
+        return;
+    }
+    if (!useNative() || !roadnav3Native())
+    {
+        sub_8078f0_guest(app, cpu);
+        return;
+    }
+    auto finish = [&]() { cpu.esp = entry + 0x18; };
+    auto ld = [](x86::reg32 address) { return double(rc::ldf32(address)); };
+    // The guest frame (esp after the prologue): the vehicle list at +0x1b4, the vehicle's matrix at +0x168 (rows of
+    // 16 bytes, position at +0x198), its size at +0x80, velocity at +0xb8, the cut vector at +0x58, the target at
+    // +0x70 and the lane byte at +0x68.
+    const x86::reg32 frame = entry - 0x1f4;
+    const x86::reg32 list = frame + 0x1b4;
+    const float side = rc::ldf32(entry + 0xc);
+    const float heading = rc::ldf32(entry + 0x10);
+    const bool along = rc::ld8(entry + 0x14) != 0;
+    const double zero = rc::ldf32a(0x9c248c);
+    const double one = rc::ldf32a(0x9c2478);
+    const double half = rc::ldf32a(0x9c2888);
+    // Calls as the guest makes them with its stack at top; a terminate request passes to the caller.
+    auto call = [&](x86::reg32 top, x86::reg32 ret, win32::MethodPtr function, x86::reg32 object,
+                    std::initializer_list<x86::reg32> arguments) {
+        const x86::CPU r = frameCall(app, cpu, top, ret, function, 0, object, arguments);
+        if (r.terminate)
+            cpu.terminate = true;
+        return r;
+    };
+    auto method = [&](x86::reg32 top, x86::reg32 ret, x86::reg32 object, x86::reg32 offset,
+                      std::initializer_list<x86::reg32> arguments) {
+        const x86::CPU r = frameCall(app, cpu, top, ret, nullptr, rc::ld32(rc::ld32(object) + offset), object,
+                                     arguments);
+        if (r.terminate)
+            cpu.terminate = true;
+        return r.eax;
+    };
+    if (count == 0)
+        return finish();
+    const x86::reg32 owner = rc::ld32(self + 0x80);
+    if (owner == 0 || owner + 0x44 == 0)
+        return finish();
+    const x86::reg32 ai = owner + 0x44;
+
+    // 0x801a20 (list, 16): the vehicles near the AI, skipping its own group's and those its target excludes.
+    x86::reg32 listed = 0;
+    {
+        const x86::reg32 inner = frame - 0x30;
+        const x86::reg32 target = method(inner, 0x801a4e, ai, 0xb0, {});
+        if (cpu.terminate)
+            return;
+        const x86::reg32 avoid = findInterface(rc::ld32(ai + 4), 0x4055b0);
+        bool avoiding = false;
+        if (avoid)
+        {
+            avoiding = (method(inner, 0x801a6c, avoid, 0x34, {}) & 0xff) != 0;
+            if (cpu.terminate)
+                return;
+        }
+        x86::reg32 targetRoad = 0;
+        if (target && avoiding)
+        {
+            const x86::reg32 info = rc::ld32(target + 0xd0);
+            if (info)
+                targetRoad = rc::ld32(info + 0x1c);
+        }
+        const x86::reg32 group = findInterface(rc::ld32(ai + 4), 0x403d20);
+        const x86::reg32 head = method(inner, 0x801ab6, ai, 0x78, {});
+        if (cpu.terminate)
+            return;
+        for (x86::reg32 node = rc::ld32(head); node != head; node = rc::ld32(node))
+        {
+            if (sreg32(listed) >= 0x10)
+                break;
+            const x86::reg32 object = rc::ld32(rc::ld32(node + 8) + 0x18);
+            if (object == 0)
+                continue;
+            const x86::reg32 vehicle = findInterface(rc::ld32(object + 4), 0x403730);
+            if (vehicle == 0)
+                continue;
+            if (group)
+            {
+                const x86::reg32 member = method(inner, 0x801b13, group, 4, {});
+                if (cpu.terminate)
+                    return;
+                if (member && rc::ld32(vehicle + 4) == rc::ld32(member + 4))
+                {
+                    const bool skip = (method(inner, 0x801b35, group, 0x10, {}) & 0xff) != 0;
+                    if (cpu.terminate)
+                        return;
+                    if (skip)
+                        continue;
+                }
+            }
+            if (avoiding && target)
+            {
+                const x86::reg32 its = findInterface(rc::ld32(vehicle + 4), 0x4036a0);
+                if (its)
+                {
+                    const x86::reg32 itsTarget = method(inner, 0x801b66, its, 0xb0, {});
+                    if (cpu.terminate)
+                        return;
+                    if (itsTarget == target)
+                    {
+                        if (targetRoad && rc::ld32(targetRoad + 4) == rc::ld32(its + 4))
+                            continue;
+                        const x86::reg32 itsAvoid = findInterface(rc::ld32(its + 4), 0x4055b0);
+                        if (itsAvoid)
+                        {
+                            const bool skip = (method(inner, 0x801b97, itsAvoid, 0x34, {}) & 0xff) != 0;
+                            if (cpu.terminate)
+                                return;
+                            if (skip)
+                                continue;
+                        }
+                    }
+                }
+            }
+            rc::st32(list + 4 * listed, vehicle);
+            ++listed;
+        }
+    }
+    if (listed == 0)
+        return finish();
+
+    rc::st8(self + 0x5f, 0);
+    const x86::reg32 drive = findInterface(rc::ld32(ai + 4), 0x403750);
+    const x86::reg32 position = method(frame, 0x807962, drive, 0x20, {});
+    if (cpu.terminate)
+        return;
+    const x86::CPU found = call(frame, 0x80797c, &sub_7f8930, self, { position, points, count, 0 });
+    if (cpu.terminate)
+        return;
+    if (sreg32(found.eax) < 0)
+        return finish();
+    const x86::reg32 cookie = points + (found.eax << 6);
+    const x86::reg32 forward = method(frame, 0x807999, drive, 0x24, {});
+    if (cpu.terminate)
+        return;
+    float own[3] = { rc::ldf32(forward), rc::ldf32(forward + 4), rc::ldf32(forward + 8) };
+    method(frame, 0x8079c5, drive, 0x38, { frame + 0x8c });
+    method(frame, 0x8079d4, drive, 0x34, { frame + 0x150 });
+    method(frame, 0x8079e3, drive, 0x4c, { frame + 0x128 });
+    if (cpu.terminate)
+        return;
+    x86::CPU sped = frameCall(app, cpu, frame, 0x8079ea, nullptr, rc::ld32(rc::ld32(drive) + 0x2c), drive, {});
+    if (sped.terminate)
+    {
+        cpu.terminate = true;
+        return;
+    }
+    const double speedExact = sped.fpu.st(0);
+    const float speed = float(speedExact);
+    if (speedExact < one)
+    {
+        own[0] = rc::ldf32(frame + 0x150);
+        own[1] = rc::ldf32(frame + 0x154);
+        own[2] = rc::ldf32(frame + 0x158);
+    }
+    float dirX, dirZ;
+    normalize2(rc::ldf32(self + 0xb8), rc::ldf32(self + 0xc0), zero, one, dirX, dirZ);
+    const x86::reg32 mode = rc::ld32(self + 0x78);
+    const bool racer = mode == 2 || mode == 4 || mode == 5;
+    const bool single = rc::ld32(self + 0x74) == 1;
+    const bool online = (call(frame, 0x807a83, &sub_64a600, self, {}).eax & 0xff) != 0;
+    if (cpu.terminate)
+        return;
+    const bool split = (call(frame, 0x807a8c, &sub_4044d0, self, {}).eax & 0xff) != 0;
+    if (cpu.terminate)
+        return;
+    const x86::reg32 group = findInterface(rc::ld32(drive + 4), 0x403d30);
+    const float sizeX = rc::ldf32(frame + 0x8c), sizeY = rc::ldf32(frame + 0x90), sizeZ = rc::ldf32(frame + 0x94);
+    const float extentY = rc::ldf32(frame + 0x128), extentZ = rc::ldf32(frame + 0x130);
+    const double low = rc::ldf32a(0x9c2920), high = rc::ldf32a(0x9c2874);
+    x86::reg32 best = count;
+    static x86::reg32 s_laneHash = 0;
+    static bool s_laneHashed = false;
+
+    for (x86::reg32 i = 0; sreg32(i) < sreg32(listed); ++i)
+    {
+        if (i)
+            app->allowPreemption(cpu);
+        if (cpu.terminate)
+            return;
+        const x86::reg32 vehicle = rc::ld32(list + 4 * i);
+        const x86::reg32 target = findInterface(rc::ld32(vehicle + 4), 0x403d30);
+        x86::reg32 other = 0;
+        if (target)
+        {
+            other = method(frame, 0x807b00, target, 0xc0, {});
+            if (cpu.terminate)
+                return;
+        }
+        bool same = false;
+        bool linked = false;
+        bool skip = false;
+        if (group && other)
+        {
+            same = method(frame, 0x807b2c, other, 0xc8, {}) == group;
+            if (cpu.terminate)
+                return;
+            const bool mine = method(frame, 0x807b3f, ai, 0xc8, {}) == target;
+            if (cpu.terminate)
+                return;
+            linked = same || mine;
+            if (linked)
+            {
+                if (same)
+                {
+                    const x86::reg32 race = findInterface(rc::ld32(group + 4), 0x406240);
+                    const x86::reg32 kind = method(frame, 0x807b75, race, 0xc, {});
+                    if (cpu.terminate)
+                        return;
+                    if (kind == 4)
+                    {
+                        const x86::reg32 state = method(frame, 0x807b88, target, 0xf4, {});
+                        if (cpu.terminate)
+                            return;
+                        skip = rc::ld8(state + 1) != 0;
+                    }
+                }
+            }
+            else
+            {
+                // stringhash32 of the read-only name at 0x9c349c, the same every call.
+                if (!s_laneHashed)
+                {
+                    s_laneHash = call(frame, 0x807b9f, &sub_606b60, 0, { 0x9c349c }).eax;
+                    if (cpu.terminate)
+                        return;
+                    s_laneHashed = true;
+                }
+                // 0x405960 (road, other): both on the road of the same id.
+                auto sameRoad = [](x86::reg32 road, x86::reg32 with) {
+                    const x86::reg32 info = rc::ld32(road + 0x1c);
+                    return info && with && rc::ld32(info + 4) == rc::ld32(with + 4);
+                };
+                const x86::reg32 key = method(frame, 0x807bb0, ai, 0xec, {});
+                if (cpu.terminate)
+                    return;
+                if (rc::ld32(key) == s_laneHash)
+                {
+                    const x86::reg32 road = method(frame - 4, 0x807bbe, ai, 0x74, {});
+                    if (cpu.terminate)
+                        return;
+                    skip = sameRoad(road, target);
+                }
+                if (!skip)
+                {
+                    const x86::reg32 otherKey = method(frame, 0x807be8, other, 0xec, {});
+                    if (cpu.terminate)
+                        return;
+                    if (rc::ld32(otherKey) == s_laneHash)
+                    {
+                        const x86::reg32 road = method(frame - 4, 0x807bf6, other, 0x74, {});
+                        if (cpu.terminate)
+                            return;
+                        skip = sameRoad(road, group);
+                    }
+                }
+            }
+        }
+        if (skip)
+            continue;
+
+        // The vehicle's matrix and position, within the height band of the cookie.
+        method(frame, 0x807c18, vehicle, 4, { frame + 0x168 });
+        if (cpu.terminate)
+            return;
+        const x86::reg32 pAt = frame + 0x38;
+        for (x86::reg32 o = 0; o < 12; o += 4)
+            rc::st32(pAt + o, rc::ld32(frame + 0x198 + o));
+        const double rise = ld(pAt + 4) - ld(cookie + 0x34);
+        if (!(rise >= low && rise <= high))
+            continue;
+        method(frame, 0x807c84, vehicle, 0x10, { frame + 0x80 });
+        if (cpu.terminate)
+            return;
+        bool racing = false;
+        if (target)
+        {
+            const x86::reg32 state = method(frame, 0x807c8f, target, 0x6c, {});
+            if (cpu.terminate)
+                return;
+            racing = state == 1 || state == 4;
+        }
+        const double c10 = ld(cookie + 0x10), c14 = ld(cookie + 0x14);
+        if (racer && racing)
+        {
+            double across = double(float(ld(frame + 0x168) * c10 + ld(frame + 0x170) * c14));
+            if (across < zero)
+                across = -across;
+            if (across > double(rc::ldf32a(0x9c3274)) && target)
+            {
+                const x86::reg32 kind = method(frame, 0x807cf5, target, 0x54, {});
+                if (cpu.terminate)
+                    return;
+                if (rc::ld32(0xa9e7bc) == rc::ld32(kind))
+                {
+                    const double back = -6.0;
+                    for (x86::reg32 o = 0; o < 12; o += 4)
+                        rc::stf32(pAt + o, float(back * ld(frame + 0x188 + o) + ld(pAt + o)));
+                    rc::st32(frame + 0x80, 0x3fe66666u);
+                    rc::st32(frame + 0x88, 0x3fe66666u);
+                }
+            }
+        }
+        const double size80 = ld(frame + 0x80), size88 = ld(frame + 0x88);
+        const double px = ld(pAt), py = ld(pAt + 4), pz = ld(pAt + 8);
+        const double a = px - ld(position), b = py - ld(position + 4), c = pz - ld(position + 8);
+        double t1 = ld(frame + 0x188) * c10 + ld(frame + 0x190) * c14;
+        if (t1 < zero)
+            t1 = -t1;
+        double t2 = ld(frame + 0x168) * c10 + ld(frame + 0x170) * c14;
+        if (t2 < zero)
+            t2 = -t2;
+        const float w48 = float(((t2 + one) * size80 + t1 * size88) + half);
+        const float w24 = float((double(extentZ) + double(extentY)) + half);
+        const float w14 = float(a * c10 + c * c14);
+        double u = (ld(frame + 0x190) * double(sizeZ) + ld(frame + 0x18c) * double(sizeY)) +
+                   ld(frame + 0x188) * double(sizeX);
+        if (u < zero)
+            u = -u;
+        double v = (ld(frame + 0x16c) * double(sizeY) + ld(frame + 0x170) * double(sizeZ)) +
+                   ld(frame + 0x168) * double(sizeX);
+        if (v < zero)
+            v = -v;
+        float w30 = float((u * size88 + v * size80) + double(extentY));
+        double offset = (double(sizeZ) * c + double(sizeX) * a) + double(sizeY) * b;
+        if (offset < zero)
+            offset = -offset;
+        const float w1c = float(offset);
+        x86::reg32 cut = 0;
+        if (single || double(speed) < double(rc::ldf32a(0x9f2e10)))
+        {
+            if (double(w14) + double(w48) < double(w24))
+                cut = 2;
+        }
+        else if (double(w14) - double(w48) <= double(w24))
+        {
+            cut = 2;
+        }
+        if (!linked)
+        {
+            if (-(double(w24) + double(w48)) > double(w14))
+                continue;
+            if (double(w14) + double(w48) < zero && double(w1c) < double(w30))
+                continue;
+        }
+
+        // Closing time from the vehicle's velocity against the navigator's.
+        method(frame, 0x807f5c, vehicle, 8, { frame + 0xb8 });
+        if (cpu.terminate)
+            return;
+        const float vel[3] = { rc::ldf32(frame + 0xb8), rc::ldf32(frame + 0xbc), rc::ldf32(frame + 0xc0) };
+        const float w54 = float(double(w24) + double(w48));
+        double gap = double(w14) - double(w54);
+        if (!(gap > zero))
+            gap = zero;
+        const double reachQ = double(w24) < gap ? double(w24) : gap;
+        const float q[3] = { float(reachQ * c10 + ld(position)), rc::ldf32(position + 4),
+                             float(reachQ * c14 + ld(position + 8)) };
+        const double reachP = double(w48) < gap ? double(w48) : gap;
+        const float p[3] = { float(px - reachP * c10), float(py), float(pz - reachP * c14) };
+        float closing = 0.0f;
+        const float w28 = float(cookieTime(p, q, vel, own, closing));
+        const bool chase = racer && racing;
+        bool narrow = false;
+        if (!(cut & 2))
+        {
+            // 0x807490 (navigator; AI, other, offset): marks the other's lane when lanes influence traffic.
+            if (rc::ld8(0xb77ef4))
+            {
+                call(frame, 0x8080ad, &sub_807490, self, { ai, other, floatBits(w14) });
+                if (cpu.terminate)
+                    return;
+            }
+            else if (rc::ld8(0xa7ad30) && ai && other)
+            {
+                const x86::reg32 inner = frame - 0x10 - 0x20;
+                const bool parked = (method(inner - 8, 0x8074d1, other, 0x114, {}) & 0xff) != 0;
+                if (cpu.terminate)
+                    return;
+                if (!parked)
+                {
+                    const x86::reg32 laneA = method(inner - 0xc, 0x8074e4, ai, 0x120, {});
+                    if (cpu.terminate)
+                        return;
+                    const x86::reg32 laneB = method(inner - 0xc, 0x8074f0, other, 0x120, {});
+                    if (cpu.terminate)
+                        return;
+                    if (rc::ld8(laneA) && rc::ld8(laneA + 2) && !(rc::ld8(laneB) && rc::ld8(laneB + 2)) &&
+                        !(ld(laneA + 4) < double(w14)))
+                    {
+                        const x86::reg32 body = method(inner - 0x10, 0x807533, other, 0x4c, {});
+                        if (cpu.terminate)
+                            return;
+                        if (body && rc::ld8(body + 0x5d) && rc::ld32(body + 0x74) == 1)
+                            rc::st8(laneB, 1);
+                    }
+                }
+            }
+            narrow = single;
+            if (!(double(closing) > zero) && !(closing != closing) && !chase)
+            {
+                double limit = w54;
+                if (single)
+                    limit = double(w54) + ((double(w24) + double(w24)) + double(speed) * half);
+                if (double(w14) > limit)
+                    continue;
+                if (single && double(w30) + one < double(w1c))
+                    continue;
+            }
+        }
+        if (!chase && !narrow && double(w28) >= double(rc::ldf32a(0x9ca2c4)))
+            continue;
+
+        // The road point ahead at the closing distance.
+        const double along0 = double(vel[0]) * c10 + double(vel[2]) * c14;
+        w30 = float(along0);
+        const double reach = along0 * double(w28) - double(w54);
+        const x86::reg32 tAt = frame + 0x70;
+        rc::stf32(tAt, float(reach * c10 + px));
+        rc::st32(tAt + 4, rc::ld32(pAt + 4));
+        rc::stf32(tAt + 8, float(reach * c14 + pz));
+        const x86::CPU ahead = call(frame, 0x8081c7, &sub_7f8930, self, { tAt, points, count, 0 });
+        if (cpu.terminate)
+            return;
+        const x86::reg32 index = ahead.eax;
+        if (sreg32(index) <= -1)
+            continue;
+        const x86::reg32 k = points + (index << 6);
+        const double r10 = ld(k + 0x10), r14 = ld(k + 0x14);
+        float row0[3], row2[3];
+        for (int j = 0; j < 3; ++j)
+        {
+            row0[j] = float(size80 * ld(frame + 0x168 + 4 * j));
+            row2[j] = float(size88 * ld(frame + 0x188 + 4 * j));
+        }
+        const float diffX = float(double(row2[0]) - double(row0[0]));
+        const float diffZ = float(double(row2[2]) - double(row0[2]));
+        const float sumX = float(double(row0[0]) + double(row2[0]));
+        const float sumZ = float(double(row0[2]) + double(row2[2]));
+        const float lateral = float(double(vel[0]) * r14 - double(vel[2]) * r10);
+        const double margin = single ? (double(extentY) + size80) + one : zero;
+        if (sreg32(index) < sreg32(best) && double(w14) > double(w54) - margin)
+        {
+            best = index;
+            rc::stf32(self + 0x6c, w30);
+        }
+        const float ratio = float(clampTo(w28, 0.0f, 1.0f));
+        const double drift = double(lateral) * double(ratio);
+        const float sway = float(double(rc::ldf32a(0x9c7cf0)) * drift);
+        const x86::reg32 uAt = frame + 0x58;
+        rc::st32(uAt, rc::ld32(tAt));
+        rc::st32(uAt + 4, rc::ld32(pAt + 4));
+        rc::st32(uAt + 8, rc::ld32(tAt + 8));
+        if (!along)
+        {
+            const double lean = rc::ldf32a(0x9f2dbc);
+            rc::stf32(uAt, float(drift * r14 * lean + ld(uAt)));
+            rc::stf32(uAt + 8, float(ld(uAt + 8) - drift * r10 * lean));
+        }
+        else
+        {
+            const float toX = float(ld(k + 0x30) - px);
+            const float toZ = float(ld(k + 0x38) - pz);
+            const double project = double(toZ) * r14 + double(toX) * r10;
+            rc::stf32(uAt, float(project * r10 + px));
+            rc::stf32(uAt + 8, float(project * r14 + pz));
+        }
+        const float ux = float(ld(uAt) - ld(k + 0x30));
+        const float uz = float(ld(uAt + 8) - ld(k + 0x38));
+        const double qx = ld(position) - ld(k + 0x30), qz = ld(position + 8) - ld(k + 0x38);
+        const double du = double(uz) * r14 + double(ux) * r10;
+        const double dq = qz * r14 + qx * r10;
+        const float ramp = float(rampTo(float(du - dq), -6.0f, 6.0f));
+        const float sideU = float(double(ux) * r14 - double(uz) * r10);
+        const float spanA = float(std::fabs(double(sumX) * r14 - double(sumZ) * r10));
+        const float spanB = float(std::fabs(double(diffX) * r14 - double(diffZ) * r10));
+        const double span = spanB > spanA ? spanB : spanA;
+        const float width = float(span + double(ramp) * double(sway));
+        const double facing = double(dirX) * r14 - double(dirZ) * r10;
+        float goal = float(facing + facing +
+                           (double(ramp) * double(ratio) * double(heading) * double(rc::ldf32a(0x9c7950)) +
+                            double(side)));
+        if (along)
+        {
+            const double centre = (ld(k + 0x24) - ld(k + 0x20)) * ld(k + 0x2c) + ld(k + 0x20);
+            const float off = float(centre - double(sideU));
+            goal = float(clampTo(off, -0.5f, 0.5f) + double(goal));
+        }
+        float scale;
+        if (same)
+            scale = 1.0f;
+        else if (online)
+            scale = float(double(ramp) * double(rc::ldf32a(0x9f2dbc)));
+        else if (racing)
+            scale = split ? ramp : float(double(ramp) * double(rc::ldf32a(0x9f2dc8)));
+        else
+            scale = split ? float(double(ramp) * zero) : ramp;
+        const float roomRight = float((ld(k + 0x24) - double(sideU)) - double(width));
+        const float roomLeft = float((double(sideU) - double(width)) - ld(k + 0x20));
+        if (along)
+        {
+            const float lowRight = roomRight > 5.0f ? 5.0f : roomRight;
+            const double lowLeft = roomLeft > 5.0f ? 5.0 : double(roomLeft);
+            const float pull = float(double(lowRight) - lowLeft);
+            goal = float(clampTo(pull, -1.0f, 1.0f) + double(goal));
+        }
+        const double reachSide = double(scale) + ld(self + 0x84);
+        const bool rightFree = double(roomRight) > reachSide;
+        const bool leftFree = double(roomLeft) > reachSide;
+        bool lane = double(goal) < double(sideU);
+        if (leftFree != rightFree)
+            lane = leftFree;
+        const float spread = float(reachSide + double(width));
+        rc::st8(frame + 0x68, lane ? 1 : 0);
+
+        // Cut the road points from two before the one ahead while they stay ahead of the target.
+        bool moved = false;
+        x86::reg32 j = index - (along ? 2 : 0);
+        if (sreg32(j) < 0)
+            j = 0;
+        for (; sreg32(j) < sreg32(count); ++j)
+        {
+            const x86::reg32 point = points + (j << 6);
+            const x86::CPU r = call(frame, 0x808713, &sub_7ec4f0, self,
+                                    { point, uAt, floatBits(spread), rc::ld32(frame + 0x68), cut });
+            if (cpu.terminate)
+                return;
+            if ((r.eax & 0xff) == 0 && j == index)
+                break;
+            moved = true;
+            const double toward = (ld(tAt + 4) - ld(point + 0x34)) * ld(point + 0x14) +
+                                  (ld(tAt) - ld(point + 0x30)) * ld(point + 0x10);
+            if (toward + (double(w54) + double(w54)) < zero)
+                break;
+        }
+        if (!single || best != index)
+            continue;
+        if (!moved)
+        {
+            const float reachEdge = float(double(width) + ld(self + 0x84));
+            if (!(ld(k + 0x20) < double(reachEdge)) && !(ld(k + 0x24) < double(reachEdge)))
+                continue;
+            const double d = (px - ld(k + 0x30)) * r10 + (pz - ld(k + 0x38)) * r14;
+            const float nearX = float(d * r10 + ld(k + 0x30));
+            const float nearZ = float(d * r14 + ld(k + 0x38));
+            const double dx = px - double(nearX), dz = pz - double(nearZ);
+            if (!(std::sqrt(dz * dz + dx * dx) < double(reachEdge)))
+                continue;
+        }
+        rc::stf32(self + 0x70, w48);
+        for (x86::reg32 o = 0; o < 12; o += 4)
+        {
+            rc::st32(self + 0x178 + o, rc::ld32(frame + 0xb8 + o));
+            rc::st32(self + 0x16c + o, rc::ld32(pAt + o));
+        }
+        rc::st8(self + 0x5f, 1);
+        x86::reg32 blocked = 0;
+        if (other)
+        {
+            blocked = method(frame, 0x808877, other, 0x114, {}) & 0xff;
+            if (cpu.terminate)
+                return;
+        }
+        rc::st8(self + 0x60, blocked);
+    }
+
+    // 0x807690 (navigator; AI, points, count) acts only with traffic influenced by region.
+    if (rc::ld8(0xb77ef4))
+    {
+        call(frame, 0x8088c0, &sub_807690, self, { ai, points, count });
+        if (cpu.terminate)
+            return;
+    }
+    centrePoints(points, count);
     finish();
 }
 

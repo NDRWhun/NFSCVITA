@@ -32,6 +32,16 @@ M64 = 0xffffffffffffffff
 
 PRODUCERS = {'add': 'add', 'sub': 'sub', 'cmp': 'sub', 'addimm': 'add'}
 
+# Library functions with native bodies (src/nfsc/banklib.cpp, bankcode::lib_<address>): each reads only its stack
+# argument and guest memory and returns eax, leaving ecx, edx, the flags and the x87 state as they were. A call
+# becomes a direct native call where the routine reads none of ecx, edx and the flags before writing them.
+NATIVE_LIBRARY = frozenset([
+    0x897ba8, 0x897bb7, 0x897e88, 0x897eca, 0x897fda, 0x898014, 0x89805f, 0x898090, 0x89819f, 0x89832d, 0x89834b,
+    0x8983b8, 0x8983f4, 0x898423, 0x898440, 0x898487, 0x89849f, 0x8984ec, 0x8985d6, 0x898675, 0x89869f, 0x8986b5,
+])
+# What a native call leaves unchanged that the translated function sets.
+CLOBBERED = frozenset(['ecx', 'edx', 'flags'])
+
 
 class Unsupported(Exception):
     pass
@@ -273,10 +283,96 @@ def flow(code):
     return state
 
 
+def native_calls(code, native, flag_readers, imul_flags, exit_live, register_readers):
+    """Indices of the calls to functions in native after which the routine reads no part of CLOBBERED before writing
+    it. flag_readers: functions that read the flags on entry (None: all); imul_flags: imul keeps the flags it does not
+    set; exit_live: the part of CLOBBERED the caller reads after the routine returns; register_readers: function ->
+    the registers of CLOBBERED it reads on entry (all for a function not in it)."""
+    position = dict((ins.address, i) for i, ins in enumerate(code))
+    successors = []
+    for i, ins in enumerate(code):
+        targets = []
+        if ins.op != 'ret' and i + 1 < len(code):
+            targets.append(i + 1)
+        if ins.op in ('jl', 'jg'):
+            targets.append(position[ins.imm])
+        successors.append(targets)
+
+    def effects(i, ins, lean):
+        """(read, written) parts of CLOBBERED; an instruction reads its operands before it writes."""
+        read, written = set(), set()
+        regs = [r for r in (ins.base, ins.index) if r is not None] if ins.memory else []
+        op = ins.op
+        if op == 'push':
+            regs.append(ins.reg)
+        elif op == 'pop':
+            written.add(REGS[ins.reg])
+        elif op == 'store':
+            regs.append(ins.reg)
+            if not ins.memory:
+                written.add(REGS[ins.rm])
+        elif op == 'load':
+            if not ins.memory:
+                regs.append(ins.rm)
+            written.add(REGS[ins.reg])
+        elif op in ('add', 'sub', 'cmp', 'imul'):
+            regs.append(ins.reg)
+            if not ins.memory:
+                regs.append(ins.rm)
+            if op != 'cmp':
+                written.add(REGS[ins.reg])
+            if op == 'imul':
+                if imul_flags:
+                    read.add('flags')
+            else:
+                written.add('flags')
+        elif op == 'addimm':
+            if not ins.memory:
+                regs.append(ins.rm)
+                written.add(REGS[ins.rm])
+            written.add('flags')
+        elif op in ('jl', 'jg'):
+            read.add('flags')
+        elif op == 'call' and i not in lean:
+            # The translated function may leave ecx and edx as they were.
+            read.update(register_readers.get(ins.target, ('ecx', 'edx')))
+            if flag_readers is None or ins.target in flag_readers:
+                read.add('flags')
+        elif op == 'ret':
+            read.update(exit_live)
+        read.update(REGS[r] for r in regs)
+        return read & CLOBBERED, written & CLOBBERED
+
+    lean = set(i for i, ins in enumerate(code) if ins.op == 'call' and ins.target in native)
+    while True:
+        table = [effects(i, ins, lean) for i, ins in enumerate(code)]
+        live = [frozenset()] * len(code)
+        changed = True
+        while changed:
+            changed = False
+            for i in reversed(range(len(code))):
+                out = set()
+                for s in successors[i]:
+                    out |= live[s]
+                read, written = table[i]
+                value = frozenset(read | (out - written))
+                if value != live[i]:
+                    live[i] = value
+                    changed = True
+        blocked = set(i for i in lean if any(live[s] for s in successors[i]))
+        if not blocked:
+            return lean, live[0] if code else frozenset()
+        lean -= blocked
+
+
 class Emitter:
-    def __init__(self, routine, flag_readers=None, exit_flags=True):
+    def __init__(self, routine, flag_readers=None, exit_flags=True, native=frozenset(), exit_live=CLOBBERED,
+                 register_readers=None):
         """flag_readers: library functions that read the flags on entry (None: all); exit_flags: the caller reads
-        the flags after the routine returns."""
+        the flags after the routine returns; native: library functions called natively where nothing reads what
+        they leave unset (exit_live: the part of CLOBBERED the caller reads after the routine returns;
+        register_readers: library function -> the registers of CLOBBERED it reads on entry, all when missing).
+        entry_live: the part of CLOBBERED the routine reads on entry."""
         self.routine = routine
         self.code = routine.code
         self.state = flow(self.code)
@@ -286,7 +382,10 @@ class Emitter:
         self.flag_readers = None if keep else set(flag_readers)
         self.exit_flags = keep or exit_flags
         self.imul_flags = self.exit_flags or bool(self.flag_readers)
-        used = set([4])
+        exit_live = set(exit_live) | ({'flags'} if self.exit_flags else set())
+        self.native, self.entry_live = native_calls(self.code, native, self.flag_readers, self.imul_flags,
+                                                    exit_live, register_readers or {})
+        used = set([4] + ([0] if self.native else []))
         for ins in self.code:
             if ins.op in ('push', 'pop', 'store', 'load', 'add', 'sub', 'cmp', 'imul'):
                 used.add(ins.reg)
@@ -396,6 +495,8 @@ class Emitter:
                 body += self.sync_out() + ['app->allowPreemption(cpu);']
             body.append('goto L_%x;' % target)
             return ['if (%s)' % self.condition(i, op), '{'] + ['    ' + x for x in body] + ['}']
+        if op == 'call' and i in self.native:
+            return ['eax = lib_%x(app, cpu, esp);' % ins.target] + (['fk = 0;'] if self.dynamic else [])
         if op == 'call':
             lines = self.materialize(i) if self.flag_readers is None or ins.target in self.flag_readers else []
             lines += ['esp -= 4;', 'rc::st32(esp, base + 0x%xu);' % (ins.next - self.routine.begin)]
@@ -513,6 +614,10 @@ def write(directory, module, sound_dir, image, functions):
     caller = functions.get(ROUTINE_CALL[0])
     exit_flags = (caller is None or ROUTINE_CALL[1] not in caller.index_of or
                   bool(caller.live_out[caller.index_of[ROUTINE_CALL[1]]] & C.CPU_FLAG_MASK))
+    native = frozenset(t for t in NATIVE_LIBRARY if t in table)
+    # The library functions are called through the function table with their argument on the stack: none reads ecx or
+    # edx on entry (0x898e58, 0x897bda, 0x897d56, 0x8980e0, 0x897ef0 and 0x89829c write them first).
+    register_readers = dict((t, set()) for t in table)
     routines, skipped = scan(sound_dir, table) if os.path.isdir(sound_dir) else ([], [])
     total = len(routines) + len(skipped)
     unique = {}
@@ -522,14 +627,30 @@ def write(directory, module, sound_dir, image, functions):
             skipped.append((routine.bank, routine.index, 'call to 0x%x, no generated function' % missing[0]))
             continue
         unique.setdefault(routine.key, routine)
+    # After a routine returns, its caller writes ecx and the flags (0x89e2f5: test esi, esi; pop ecx). edx reaches the
+    # next routine, or through the tick list walker 0x89b1ec its other tick 0x89b3a9 and the block service at
+    # 0x89fa85, which write edx before reading it: it is live only if some routine reads it on entry (an interpreted
+    # routine might).
+    exit_live = set(['edx']) if skipped else set()
+    while True:
+        emitters = dict((key, Emitter(unique[key], flag_readers, exit_flags, native, exit_live, register_readers))
+                        for key in unique)
+        entry = set(['edx']) & set().union(*(e.entry_live for e in emitters.values()))
+        if entry <= exit_live:
+            break
+        exit_live |= entry
     # Routines go to <module>_bankcode.<n>.cpp files of about PART_BYTES each, the table to <module>_bankcode.cpp.
     parts = [[]]
     size = 0
+    calls = lean = 0
     for key in sorted(unique):
         routine = unique[key]
         text = ['// %s routine %d (+0x%x, %d bytes)' % (routine.bank, routine.index, routine.begin,
                                                       routine.end - routine.begin)]
-        text += Emitter(routine, flag_readers, exit_flags).function('bank_%016x' % key) + ['']
+        emitter = emitters[key]
+        text += emitter.function('bank_%016x' % key) + ['']
+        calls += sum(1 for ins in routine.code if ins.op == 'call')
+        lean += len(emitter.native)
         if size >= PART_BYTES:
             parts.append([])
             size = 0
@@ -558,6 +679,8 @@ def write(directory, module, sound_dir, image, functions):
         f.write('\n'.join(lines))
     summary = 'bank code: %d routines in the banks, %d distinct recompiled, %d left to the interpreter' % (
         total, len(unique), len(skipped))
+    summary += '\nbank code: %d of %d library calls native (registers read after the routine: %s)' % (
+        lean, calls, ', '.join(sorted(exit_live)) or 'none')
     for bank, index, reason in skipped[:20]:
         summary += '\n  interpreted: %s routine %d: %s' % (bank, index, reason)
     return summary

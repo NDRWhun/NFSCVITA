@@ -1,8 +1,13 @@
 #include "bench.h"
+#include "audio_decode.h"
+#include "bankcode.h"
+#include "collision.h"
 #include "feng.h"
 #include "guestcall.h"
 #include "physics.h"
+#include "scenery.h"
 #include "sim.h"
+#include "vehicle.h"
 
 #include <lib/controls.h>
 #include <lib/memmap.h>
@@ -345,7 +350,12 @@ void framePresented(uint32_t presentUs)
                 s_extra);
     sim::logShadow();
     physics::logShadow();
+    collision::logShadow();
     feng::logShadow();
+    scenery::logShadow();
+    vehicle::logShadow();
+    bankcode::logShadow();
+    audiodecode::logShadow();
     if (s_frameCount == s_frames.size())
         pf::logInfo("bench: frame buffer full, later frames not counted");
     s_phase.store(Done, std::memory_order_release);

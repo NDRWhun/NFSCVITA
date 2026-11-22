@@ -3,6 +3,7 @@
 // physics_native=0 runs the translated bodies instead.
 
 #include "physics.h"
+#include "shadow.h"
 
 #include <native.h>
 #include <platform/config.h>
@@ -429,106 +430,25 @@ void tireUnloaded(Status& fsw, x86::reg32 w, float dt)
     rc::st32(w + 0x110, 0);
 }
 
-// shadow_physics=1: each call of a physics port runs the translated body on a copy of the CPU, then the native one
-// from the same guest memory, and compares the registers, the x87 stack and the memory it writes.
-struct ShadowRegion
-{
-    x86::reg32 address, size;
-};
-
-int s_shadow = -1;
-bool s_shadowRunning = false;
-uint32_t s_shadowCompared = 0, s_shadowDiffer = 0, s_shadowNanOnly = 0;
+// shadow_physics=1: physics port calls compared with their translated bodies.
+shadow::Group s_shadow("shadow_physics");
+using ShadowRegion = shadow::Region;
 
 bool shadowOn()
 {
-    if (s_shadow < 0)
-        s_shadow = pf::Config::getBool("shadow_physics", false) ? 1 : 0;
-    return s_shadow != 0 && !s_shadowRunning;
+    return s_shadow.active();
 }
 
-// Logs a difference of the current call while fewer than 16 calls differed before it.
-void shadowReport(const char* name, const char* what, x86::reg32 guest, x86::reg32 native, int& found)
-{
-    ++found;
-    if (s_shadowDiffer < 16)
-        pf::logInfo("shadow_physics: %s call %u: %s translated 0x%08x native 0x%08x", name, unsigned(s_shadowCompared),
-                    what, unsigned(guest), unsigned(native));
-}
+// The registers the translated bodies write back for their callers: edx, ebx, esp, esi, edi.
+constexpr x86::reg32 WrittenBack = 0xdc;
 
 // Runs port (the native entry, with the shadow off) after the translated body guest; regions: the guest memory
-// either may write, restored before the native run.
+// either may write, restored before the native run; repeatable: whether the native run may follow.
 void shadowCall(const char* name, win32::WinApplication* app, x86::CPU& cpu, win32::MethodPtr guest,
-                win32::MethodPtr port, const std::vector<ShadowRegion>& regions)
+                win32::MethodPtr port, const std::vector<ShadowRegion>& regions, shadow::Group::Repeatable repeatable,
+                const void* context)
 {
-    s_shadowRunning = true;
-    std::vector<x86::reg8> before, translated;
-    for (const ShadowRegion& r : regions)
-        before.insert(before.end(), rc::host(r.address), rc::host(r.address) + r.size);
-    x86::CPU reference = cpu;
-    guest(app, reference);
-    size_t at = 0;
-    for (const ShadowRegion& r : regions)
-    {
-        translated.insert(translated.end(), rc::host(r.address), rc::host(r.address) + r.size);
-        memcpy(rc::host(r.address), before.data() + at, r.size);
-        at += r.size;
-    }
-    port(app, cpu);
-    s_shadowRunning = false;
-    if (reference.terminate || cpu.terminate)
-    {
-        cpu.terminate = true;
-        return;
-    }
-    ++s_shadowCompared;
-    int found = 0;
-    // The registers the translated body writes back for its callers.
-    const x86::reg32 g[] = { reference.edx, reference.ebx, reference.esp, reference.esi, reference.edi };
-    const x86::reg32 n[] = { cpu.edx, cpu.ebx, cpu.esp, cpu.esi, cpu.edi };
-    static const char* const names[] = { "edx", "ebx", "esp", "esi", "edi" };
-    for (int i = 0; i < 5; ++i)
-    {
-        if (g[i] != n[i])
-            shadowReport(name, names[i], g[i], n[i], found);
-    }
-    if (reference.fpu.count != cpu.fpu.count)
-        shadowReport(name, "x87 depth", reference.fpu.count, cpu.fpu.count, found);
-    if (reference.fpu.status.word != cpu.fpu.status.word)
-        shadowReport(name, "x87 status", reference.fpu.status.word, cpu.fpu.status.word, found);
-    // Memory word by word; words that are float NaNs in both runs count apart (NaN sign or payload only).
-    auto isNan = [](x86::reg32 v) { return (v & 0x7f800000u) == 0x7f800000u && (v & 0x7fffffu) != 0; };
-    bool nanOnly = false;
-    at = 0;
-    for (const ShadowRegion& r : regions)
-    {
-        bool reported = false;
-        for (x86::reg32 i = 0; i + 4 <= r.size; i += 4)
-        {
-            x86::reg32 t, n;
-            memcpy(&t, &translated[at + i], 4);
-            memcpy(&n, rc::host(r.address + i), 4);
-            if (t == n)
-                continue;
-            if (isNan(t) && isNan(n))
-            {
-                nanOnly = true;
-                continue;
-            }
-            if (!reported)
-            {
-                char what[48];
-                snprintf(what, sizeof(what), "word at 0x%08x", unsigned(r.address + i));
-                shadowReport(name, what, t, n, found);
-                reported = true;
-            }
-        }
-        at += r.size;
-    }
-    if (found)
-        ++s_shadowDiffer;
-    else if (nanOnly)
-        ++s_shadowNanOnly;
+    s_shadow.call(name, app, cpu, guest, port, regions, WrittenBack, repeatable, context);
 }
 
 }
@@ -538,9 +458,7 @@ namespace physics
 
 void logShadow()
 {
-    if (s_shadow > 0)
-        pf::logInfo("shadow_physics: %u calls compared, %u differ, %u in NaN sign or payload only",
-                    unsigned(s_shadowCompared), unsigned(s_shadowDiffer), unsigned(s_shadowNanOnly));
+    s_shadow.log();
 }
 
 }
@@ -563,7 +481,31 @@ void sub_6fca30(win32::WinApplication* app, x86::CPU& cpu)
         const x86::reg32 body = rc::ld32(self + 0xcc);
         if (body)
             regions.push_back({ rc::ld32(rc::ld32(body + 0x30)), 0x70 });
-        shadowCall("SuspensionSimple::DoWheelForces 0x6fca30", app, cpu, &sub_6fca30_guest, &sub_6fca30, regions);
+        // A translated run whose wheel position updates changed a wheel's surface or deleted the surface collection
+        // a wheel held is not repeated (reference counts outside these regions).
+        struct Surfaces
+        {
+            x86::reg32 wheel[4], before[4];
+        } surfaces;
+        for (x86::reg32 i = 0; i < 4; ++i)
+        {
+            surfaces.wheel[i] = rc::ld32(self + 0x110 + 4 * i);
+            surfaces.before[i] = rc::ld32(surfaces.wheel[i] + 0x9c);
+        }
+        auto repeatable = [](const void* context) {
+            const Surfaces& s = *static_cast<const Surfaces*>(context);
+            for (int i = 0; i < 4; ++i)
+            {
+                if (rc::ld32(s.wheel[i] + 0x9c) != s.before[i])
+                    return false;
+                const x86::reg32 held = rc::ld32(s.wheel[i] + 0x38) ? rc::ld32(s.wheel[i] + 0x38) : rc::ld32(0xb4d868);
+                if (held && rc::ld16(held + 8) == 0)
+                    return false;
+            }
+            return true;
+        };
+        shadowCall("SuspensionSimple::DoWheelForces 0x6fca30", app, cpu, &sub_6fca30_guest, &sub_6fca30, regions,
+                   repeatable, &surfaces);
         return;
     }
     if (!useNative())

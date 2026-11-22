@@ -1,3 +1,6 @@
+#include "audio_decode.h"
+#include "shadow.h"
+
 #include <native.h>
 #include <platform/config.h>
 #include <recomp.h>
@@ -26,6 +29,8 @@ namespace
 
 // mixer_native, read once; a relaxed flag instead of a guarded static (no barrier per call).
 std::atomic<int> s_native{-1};
+
+shadow::Group s_shadow("shadow_mixer");
 
 bool useNative()
 {
@@ -87,29 +92,72 @@ x86::reg16 nearest16(x86::reg32 bits)
 }
 
 typedef x86::reg32 Lanes __attribute__((vector_size(16)));
-typedef x86::sreg32 SignedLanes __attribute__((vector_size(16)));
+typedef float FloatLanes __attribute__((vector_size(16)));
 typedef x86::reg16 HalfLanes __attribute__((vector_size(8)));
 
-// 0x537310's 16-bit output of four float samples: nearest16 in the same steps lane by lane, 0x8000 saturated to
-// 0x7fff for a positive sign bit.
+// 0x537310's 16-bit output of four float samples: nearest16 saturated to [-32768, 32767], a NaN to 0x7fff or 0x8000
+// by its sign. The clamped value plus 1.5 * 2^23 rounds to an integer to nearest even in the low mantissa bits.
 HalfLanes saturated16(Lanes bits)
 {
-    const Lanes clampBits = Lanes{} + 0x47000000;
-    Lanes magnitude = bits & 0x7fffffff;
-    magnitude = magnitude < clampBits ? magnitude : clampBits;
-    const Lanes exponent = magnitude >> 23;
-    const Lanes valid = Lanes(exponent >= 126);
-    const Lanes shift = valid ? 150 - exponent : Lanes{} + 24;
-    const Lanes mantissa = (magnitude & 0x7fffff) | 0x800000;
-    const Lanes half = Lanes{} + 1 << (shift - 1);
-    const Lanes rest = mantissa & ((half << 1) - 1);
-    Lanes rounded = mantissa >> shift;
-    rounded -= Lanes(rest > half) | (Lanes(rest == half) & -(rounded & 1));
-    rounded &= valid;
-    const Lanes sign = Lanes(SignedLanes(bits) >> 31);
-    const Lanes value = ((rounded ^ sign) - sign) & 0xffff;
-    const Lanes output = value == 0x8000 ? (bits >> 31) + 0x7fff : value;
+    const FloatLanes x = FloatLanes(bits);
+    FloatLanes clamped = x > 32767.0f ? FloatLanes{} + 32767.0f : x;
+    clamped = clamped < -32768.0f ? FloatLanes{} - 32768.0f : clamped;
+    const Lanes rounded = Lanes(clamped + 12582912.0f) - 0x4b400000;
+    const Lanes nan = Lanes(x != x);
+    const Lanes output = (nan & ((bits >> 31) + 0x7fff)) | (~nan & rounded);
     return __builtin_convertvector(output, HalfLanes);
+}
+
+// Engine-audio blocks decoded outside guest memory: 32 samples, the second header value and the decode's registers.
+struct DecodedBlock
+{
+    float samples[32];
+    x86::reg32 second, shift, source;
+};
+
+// decodeBlock's steps for N consecutive blocks side by side, from block `first` of the data at `data`.
+template <x86::reg32 N>
+void decodeBlocks(const x86::reg8* base, x86::reg32 data, x86::reg32 first, DecodedBlock* out)
+{
+    double a[N], b[N];
+    float x[N], y[N];
+    x86::reg32 shift[N], packed[N];
+    for (x86::reg32 k = 0; k < N; ++k)
+    {
+        const x86::reg32 source = data + (first + k) * 19;
+        const x86::reg8* header = base + source;
+        const x86::sreg32 one = x86::sreg32(x86::sreg8(header[1])) * 256 + (header[0] & 0xf0);
+        const x86::sreg32 two = x86::sreg32(x86::sreg8(header[3])) * 256 + (header[2] & 0xf0);
+        a[k] = get<float>(base, 0xa5b654 + (header[0] & 15) * 4);
+        b[k] = get<float>(base, 0xa5b664 + (header[0] & 15) * 4);
+        shift[k] = (header[2] & 15) * 16;
+        packed[k] = source + 4;
+        x[k] = float(one);
+        y[k] = float(two);
+        out[k].samples[0] = x[k];
+        out[k].samples[1] = y[k];
+        out[k].second = x86::reg32(two);
+        out[k].shift = shift[k];
+        out[k].source = source;
+    }
+    for (x86::reg32 pair = 0; pair < 15; ++pair)
+    {
+        const x86::reg32 phase = pair % 5;
+        for (x86::reg32 k = 0; k < N; ++k)
+        {
+            const x86::reg32 nibbles = base[packed[k] + pair];
+            const double high = get<float>(base, 0xa5b678 + (shift[k] + (nibbles >> 4)) * 4);
+            const double low = get<float>(base, 0xa5b678 + (shift[k] + (nibbles & 15)) * 4);
+            const double even = phase == 1 ? (a[k] * double(y[k]) + high) + b[k] * double(x[k])
+                                           : (b[k] * double(x[k]) + high) + a[k] * double(y[k]);
+            const double odd = phase < 2 ? (b[k] * double(y[k]) + low) + even * a[k]
+                                         : (even * a[k] + low) + b[k] * double(y[k]);
+            x[k] = float(even);
+            y[k] = float(odd);
+            out[k].samples[2 + pair * 2] = x[k];
+            out[k].samples[3 + pair * 2] = y[k];
+        }
+    }
 }
 
 // 0x536c40's body: decodes the engine-audio block named in the argument slot (which receives the second header
@@ -117,15 +165,17 @@ HalfLanes saturated16(Lanes bits)
 void decodeBlock(x86::reg32 object, x86::reg32 slot, x86::reg32& eax, x86::reg32& ecx, x86::reg32& edx)
 {
     const x86::reg32 block = rc::ld32(slot);
+    const x86::reg32 data = rc::ld32(object + 0x24);
     rc::st32(object + 0x2c, block);
-    const x86::reg32 source = rc::ld32(object + 0x24) + block * 19;
+    const x86::reg32 source = data + block * 19;
     const x86::sreg32 first = x86::sreg32(x86::sreg8(rc::ld8(source + 1))) * 256
                               + (rc::ld8(source) & 0xf0);
+    rc::st32(slot, x86::reg32(first));
+    rc::stf32(object + 0x30, float(first));
     const x86::sreg32 second = x86::sreg32(x86::sreg8(rc::ld8(source + 3))) * 256
                                + (rc::ld8(source + 2) & 0xf0);
-    rc::stf32(object + 0x30, float(first));
-    rc::stf32(object + 0x34, float(second));
     rc::st32(slot, x86::reg32(second));
+    rc::stf32(object + 0x34, float(second));
     const x86::reg32 predictor = rc::ld8(source) & 15;
     const double a = rc::ldf32(0xa5b654 + predictor * 4);
     const double b = rc::ldf32(0xa5b664 + predictor * 4);
@@ -339,14 +389,9 @@ void sub_8ab884(win32::WinApplication* app, x86::CPU& cpu)
     cpu.esp += 4;
 }
 
-// Reads engine samples across compressed blocks and saturates them to signed 16-bit output.
-void sub_537310(win32::WinApplication* app, x86::CPU& cpu)
+// 0x537310's native body: reads engine samples across compressed blocks and saturates them to signed 16-bit output.
+static void engineSamples(win32::WinApplication*, x86::CPU& cpu)
 {
-    if (!useNative())
-    {
-        runGuest(sub_537310_guest, app, cpu);
-        return;
-    }
     const x86::reg32 stack = cpu.esp;
     const x86::reg32 object = cpu.ecx;
     const x86::reg32 start = rc::ld32(stack + 4);
@@ -374,32 +419,62 @@ void sub_537310(win32::WinApplication* app, x86::CPU& cpu)
         decodeBlock(object, callStack + 4, decodedEax, ecx, decodedEdx);
         decodedBlock = true;
     };
-    if (start / 32 != ecx)
-        decode(start / 32, stack - 20);
+    const bool cached = start / 32 == ecx;
     x86::reg32 offset = start & 31;
     const x86::reg32 destination = rc::ld32(stack + 12);
     const x86::reg32 data = rc::ld32(object + 0x24);
     const uint64_t firstBlock = start / 32;
     const uint64_t lastBlock = (uint64_t(start) + count) / 32;
-    // Rounding to nearest, and the output away from everything the samples and block decodes read or write.
+    const x86::reg32 blockData = x86::reg32(data + firstBlock * 19);
+    const uint64_t blockBytes = (lastBlock - firstBlock) * 19 + 19;
+    // Rounding to nearest, the output away from everything the samples and block decodes read or write, and the
+    // blocks and tables away from the decoded samples and argument slots: the blocks decode outside guest memory,
+    // two at a time, and the object and slots receive the last decode's state at the end.
     if (cpu.fpu.control.rc == 0 && x86::sreg32(count) > 0 && !overlaps(destination, uint64_t(count) * 2, stack - 32, 48)
         && !overlaps(destination, uint64_t(count) * 2, object, 0xb0)
         && !overlaps(destination, uint64_t(count) * 2, 0xa5b654, 0x424)
         && uint64_t(data) + lastBlock * 19 + 19 <= 0x100000000ull
-        && !overlaps(destination, uint64_t(count) * 2, x86::reg32(data + firstBlock * 19),
-                     (lastBlock - firstBlock) * 19 + 19))
+        && !overlaps(destination, uint64_t(count) * 2, blockData, blockBytes)
+        && !overlaps(blockData, blockBytes, object, 0xb0) && !overlaps(blockData, blockBytes, stack - 32, 48)
+        && !overlaps(object, 0xb0, stack - 32, 48)
+        && !overlaps(object, 0xb0, 0xa5b654, 0x424) && !overlaps(stack - 32, 48, 0xa5b654, 0x424))
     {
         x86::reg8* const base = rc::host(0);
         const x86::reg32 high = x86::reg32(rc::ld16(stack + 10)) << 16;
         x86::reg32 bits = 0;
-        x86::reg16 value = 0;
-        auto convert = [&](x86::reg32 i, x86::reg32 sample)
+        DecodedBlock blocks[2];
+        const DecodedBlock* last = nullptr;
+        x86::reg32 next = x86::reg32(cached ? firstBlock + 1 : firstBlock);
+        x86::reg32 ready = 0, used = 0;
+        // The next block's samples, decoded with the one after it when the call reads that one too.
+        auto take = [&]()
         {
-            bits = sample;
-            value = nearest16(bits);
-            ecx = value == 0x8000 ? (bits >> 31) + 0x7fff : high | value;
-            put(base, destination + i * 2, x86::reg16(ecx));
+            if (used == ready)
+            {
+                if (uint64_t(next) + 1 <= lastBlock)
+                {
+                    decodeBlocks<2>(base, data, next, blocks);
+                    ready = 2;
+                }
+                else
+                {
+                    decodeBlocks<1>(base, data, next, blocks);
+                    ready = 1;
+                }
+                used = 0;
+            }
+            last = &blocks[used++];
+            ++next;
+            return reinterpret_cast<const x86::reg8*>(last->samples);
         };
+        const x86::reg8* samples = base + object + 0x30;
+        x86::reg32 startSecond = 0, loopSecond = 0;
+        bool loopDecoded = false;
+        if (!cached)
+        {
+            samples = take();
+            startSecond = last->second;
+        }
         // Whether a sample came after the last block decode: then ecx holds that sample's result.
         bool converted = false;
         for (x86::reg32 i = 0; i < count;)
@@ -408,37 +483,47 @@ void sub_537310(win32::WinApplication* app, x86::CPU& cpu)
             const x86::reg32 end = i + std::min(count - i, 32 - offset);
             for (; i + 4 <= end; i += 4, offset += 4)
             {
-                const Lanes samples = get<Lanes>(base, object + 0x30 + offset * 4);
-                put(base, destination + i * 2, saturated16(samples));
-                bits = samples[3];
+                const Lanes lanes = get<Lanes>(samples, offset * 4);
+                put(base, destination + i * 2, saturated16(lanes));
+                bits = lanes[3];
                 converted = true;
             }
             for (; i < end; ++i, ++offset)
             {
-                convert(i, get<x86::reg32>(base, object + 0x30 + offset * 4));
+                bits = get<x86::reg32>(samples, offset * 4);
+                const x86::reg16 value = nearest16(bits);
+                put(base, destination + i * 2, x86::reg16(value == 0x8000 ? (bits >> 31) + 0x7fff : value));
                 converted = true;
             }
             if (offset == 32)
             {
-                decode(rc::ld32(object + 0x2c) + 1, stack - 24);
+                samples = take();
+                loopSecond = last->second;
+                loopDecoded = true;
                 offset = 0;
                 converted = false;
             }
         }
-        value = nearest16(bits);
-        if (converted)
-            ecx = value == 0x8000 ? (bits >> 31) + 0x7fff : high | value;
+        const x86::reg16 value = nearest16(bits);
+        if (last)
+        {
+            rc::st32(object + 0x2c, next - 1);
+            memcpy(base + object + 0x30, last->samples, sizeof(last->samples));
+            if (!cached)
+                rc::st32(stack - 16, startSecond);
+            if (loopDecoded)
+                rc::st32(stack - 20, loopSecond);
+            cpu.eax = object + 0xb0;
+            cpu.edx = last->source + 20;
+        }
+        cpu.ecx = !converted ? last->shift : value == 0x8000 ? (bits >> 31) + 0x7fff : high | value;
         rc::st32(stack + 4, bits);
         rc::st16(stack + 8, value);
-        if (decodedBlock)
-        {
-            cpu.eax = decodedEax;
-            cpu.edx = decodedEdx;
-        }
-        cpu.ecx = ecx;
         cpu.esp += 16;
         return;
     }
+    if (!cached)
+        decode(start / 32, stack - 20);
     for (x86::sreg32 i = 0; i < x86::sreg32(count); ++i)
     {
         const x86::reg32 bits = rc::ld32(object + 0x30 + offset * 4);
@@ -464,6 +549,29 @@ void sub_537310(win32::WinApplication* app, x86::CPU& cpu)
     }
     cpu.ecx = ecx;
     cpu.esp += 16;
+}
+
+// Reads engine samples across compressed blocks and saturates them to signed 16-bit output; shadow_mixer compares
+// each call with the translated body (the object, the argument slots and the output; eax and edx are dead).
+void sub_537310(win32::WinApplication* app, x86::CPU& cpu)
+{
+    if (!useNative())
+    {
+        runGuest(sub_537310_guest, app, cpu);
+        return;
+    }
+    if (!s_shadow.active())
+    {
+        engineSamples(app, cpu);
+        return;
+    }
+    const x86::reg32 start = rc::ld32(cpu.esp + 4);
+    const x86::reg32 count = rc::ld32(cpu.esp + 8);
+    shadow::Region regions[3] = { { cpu.ecx, 0xb0 }, { cpu.esp + 4, 12 }, { rc::ld32(cpu.esp + 12), 0 } };
+    if (x86::sreg32(start) >= 0 && x86::sreg32(count) > 0 && count < 0x100000
+        && x86::sreg32(start + count - 1) < x86::sreg32(rc::ld32(cpu.ecx + 0x14)))
+        regions[2].size = count * 2;
+    s_shadow.call("0x537310", app, cpu, sub_537310_guest, engineSamples, regions, 3, 0xfa);
 }
 
 // Converts signed 16-bit samples to floats from the end of the buffer.
@@ -747,6 +855,16 @@ void sub_536c40(win32::WinApplication* app, x86::CPU& cpu)
     }
     decodeBlock(cpu.ecx, cpu.esp + 4, cpu.eax, cpu.ecx, cpu.edx);
     cpu.esp += 8;
+}
+
+}
+
+namespace audiodecode
+{
+
+void logShadow()
+{
+    s_shadow.log();
 }
 
 }

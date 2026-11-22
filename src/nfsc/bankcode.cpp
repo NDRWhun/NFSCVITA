@@ -664,6 +664,7 @@ void changed(x86::reg32 address, x86::reg32 size)
 void install()
 {
     s_native = pf::Config::getBool("bank_native", true);
+    installLibrary();
     win32::setForeignCodeResolver(&resolve);
     win32::setForeignCodeObserver(&changed);
 }
