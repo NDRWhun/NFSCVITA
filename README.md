@@ -96,10 +96,8 @@ The settings file `ux0:data/NFSCVITA/nfscvita.cfg` is optional; its keys are lis
 ## Known issues
 
 - Races run below 30 fps.
-- Reduced world texture resolution.
-- Wrong address calls need to be corrected
-- OOM issues while loading some bigger career cutscenes
-- No online play.
+- Occasional crash from a call to a null address during play.
+- Out of memory when returning to the menus after a race, and while loading some larger career cutscenes.
 
 ## Build
 
