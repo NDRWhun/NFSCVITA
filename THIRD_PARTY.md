@@ -1,6 +1,7 @@
 # Third-party code and licensing
 
-NFSCVITA's own code is licensed under the GNU General Public License version 3 ([LICENSE](LICENSE)). The parts
+NFSCVITA's own code is Copyright (C) 2026 NDRWhun, licensed under the GNU General Public License version 3
+([LICENSE](LICENSE)). The parts
 below come from other projects and keep their own terms; all of them are compatible with it.
 
 ## pefile

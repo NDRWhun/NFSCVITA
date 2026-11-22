@@ -114,6 +114,8 @@ int main(int, char**)
     mkdir(s_dataDirectory.c_str(), 0777);
     pf::logInit(dataPath("nfscvita.log").c_str());
     pf::logInfo("NFSCVITA starting");
+    pf::logInfo("NFSCVITA is free software under the GNU GPL v3, without warranty; source: "
+                "https://github.com/NDRWhun/NFSCVITA");
     pf::logInfo("arm clock: request 500 MHz returned 0x%08X, running at %d MHz", unsigned(clock500),
                 scePowerGetArmClockFrequency());
     x86::mmxSelfTest();

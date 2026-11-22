@@ -133,7 +133,8 @@ tools/build.ps1 -Game "<folder with NFSC.exe>" -Compiler clang   # -> build-rele
 
 ## License
 
-GNU GPL v3 for the port's own code ([LICENSE](LICENSE)); third-party parts: [THIRD_PARTY.md](THIRD_PARTY.md).
+Copyright (C) 2026 NDRWhun. GNU GPL v3 for the port's own code ([LICENSE](LICENSE)); third-party parts:
+[THIRD_PARTY.md](THIRD_PARTY.md). Forks and derived works: see [AGENTS.md](AGENTS.md).
 
 Unofficial, non-commercial fan port, not affiliated with or endorsed by Electronic Arts. *Need for Speed* is a
 trademark of Electronic Arts. You must own the game.
