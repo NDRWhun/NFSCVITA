@@ -10,7 +10,7 @@
   <b>Need for Speed Carbon, on the PS Vita</b>
   <br />
   <br />
-  A static recompilation of Need for Speed Carbon (PC, 2006) to the PS Vita, with a native sceGxm renderer.
+  A fan port of the PC version of Need for Speed Carbon (2006)
   <br />
   <br />
   <a href="#install">Install</a>
@@ -22,7 +22,7 @@
   <a href="../../issues">Report Bug</a>
 </p>
 
-[![build][build-shield]][build-url]&nbsp;[![issues][issues-shield]][issues-url]&nbsp;[![last commit][commit-shield]][commit-url]
+[![build][build-shield]][build-url]&nbsp;[![downloads][downloads-shield]][downloads-url]&nbsp;[![issues][issues-shield]][issues-url]&nbsp;[![last commit][commit-shield]][commit-url]
 
 [![platform][platform-shield]][platform-url]&nbsp;[![resolution][resolution-shield]][resolution-url]&nbsp;[![renderer][renderer-shield]][renderer-url]&nbsp;[![license][license-shield]][license-url]
 
@@ -32,19 +32,21 @@
 
 ## Requirements
 
-- Need for Speed Carbon for PC, version 1.4, unprotected `NFSC.exe`
-  (SHA-256 `baaaaec33873d4ba7e4dbae6a5212049ffdcf9679a35d865d7625b4189952fd3`) (your own copy)
+- Need for Speed Carbon for PC, **version 1.4** (your own copy)
+- The game's `NFSC.exe` must be unprotected, with the SHA-256
+  `baaaaec33873d4ba7e4dbae6a5212049ffdcf9679a35d865d7625b4189952fd3`
 - PS Vita with HENkaku / Ensō and [VitaShell](https://github.com/TheOfficialFloW/VitaShell)
-- Room on the memory card for the game folder (about 5.4 GB)
-- ARM clock at 500 MHz, for example with [PSVshell](https://github.com/Electry/PSVshell)
-- Optional: [CapUnlocker](https://github.com/GrapheneCt/CapUnlocker) (fourth CPU core)
+- About 5.4 GB free on the memory card
+- Overclocking is mandatory, for example with [PSVshell](https://github.com/Electry/PSVshell)
+- [CapUnlocker](https://github.com/GrapheneCt/CapUnlocker) is highly recommended
 
 ## Install
 
 1. Install `NFSCVITA.vpk` with VitaShell.
 2. Create the folder `ux0:data/NFSCVITA/` in VitaShell (or start the game once; it creates the folder and closes).
-3. Copy the game folder's contents (`NFSC.exe` and the data folders) to `ux0:data/NFSCVITA/`. `NFSC.exe` must end
-   up at `ux0:data/NFSCVITA/NFSC.exe`.
+3. On your PC, open the game folder (the one with `NFSC.exe`) and copy **everything inside it** to
+   `ux0:data/NFSCVITA/` (VitaShell's FTP or USB mode works). `NFSC.exe` must end up at
+   `ux0:data/NFSCVITA/NFSC.exe`.
 4. Start the game from the home screen.
 
 If the game closes right away, `ux0:data/NFSCVITA/nfscvita.log` says what is missing.
@@ -86,7 +88,7 @@ If the game closes right away, `ux0:data/NFSCVITA/nfscvita.log` says what is mis
 | <img src="assets/icons/dpad-right.svg" width="20" alt="D-pad right"> | Messages |
 | Front touch, top | Next song |
 
-Text fields open the Vita keyboard.
+Text fields open the Vita keyboard. To quit, use the PS button.
 
 ## Settings
 
@@ -106,7 +108,7 @@ downloaded on the first build: [VitaSDK](https://vitasdk.org) and [LLVM](https:/
 Ninja with pip. To use your own VitaSDK or LLVM, set `VITASDK` or `NFSC_LLVM` (or put them in `tools/env.local.ps1`).
 
 ```powershell
-tools/build.ps1 -Game "<folder with NFSC.exe>" -Compiler clang   # -> build-release-clang/NFSCVITA.vpk
+tools/build.ps1 -Game "<folder with NFSC.exe>"   # -> build-release-clang/NFSCVITA.vpk
 ```
 
 - The recompiled code is generated from your own `NFSC.exe`; no game code or data is in this repository.
@@ -141,14 +143,16 @@ trademark of Electronic Arts. You must own the game.
 
 [build-shield]: https://img.shields.io/github/actions/workflow/status/NDRWhun/NFSCVITA/build.yml?branch=main&label=build&style=for-the-badge&labelColor=1a1f3d&logo=githubactions&logoColor=white
 [build-url]: ../../actions/workflows/build.yml
+[downloads-shield]: https://img.shields.io/github/downloads/NDRWhun/NFSCVITA/total?label=downloads&style=for-the-badge&labelColor=1a1f3d&color=b44dff&logo=github&logoColor=white
+[downloads-url]: ../../releases
 [issues-shield]: https://img.shields.io/github/issues/NDRWhun/NFSCVITA?label=issues&style=for-the-badge&labelColor=1a1f3d&color=2f7bff&logo=github&logoColor=white
 [issues-url]: ../../issues
 [commit-shield]: https://img.shields.io/github/last-commit/NDRWhun/NFSCVITA?label=updated&style=for-the-badge&labelColor=1a1f3d&color=ff3b5c
 [commit-url]: ../../commits/main
-[platform-shield]: https://img.shields.io/badge/PS%20Vita-native-2f7bff?style=for-the-badge&labelColor=1a1f3d&logo=playstation&logoColor=white
+[platform-shield]: https://img.shields.io/badge/PS%20Vita-homebrew-2f7bff?style=for-the-badge&labelColor=1a1f3d&logo=playstation&logoColor=white
 [platform-url]: https://vitasdk.org
-[resolution-shield]: https://img.shields.io/badge/960x544-native-b44dff?style=for-the-badge&labelColor=1a1f3d
-[resolution-url]: #known-issues
+[resolution-shield]: https://img.shields.io/badge/960x544-16%3A9-b44dff?style=for-the-badge&labelColor=1a1f3d
+[resolution-url]: #settings
 [renderer-shield]: https://img.shields.io/badge/renderer-sceGxm-ff3b5c?style=for-the-badge&labelColor=1a1f3d
 [renderer-url]: #build
 [license-shield]: https://img.shields.io/badge/license-GPLv3-ff3b5c?style=for-the-badge&labelColor=1a1f3d
